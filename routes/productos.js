@@ -9,6 +9,7 @@ function validarProducto(body) {
   if (!body.tipo || !['MateriaPrima', 'ProductoTerminado'].includes(body.tipo)) return 'Tipo inválido';
   if (!body.unidad || typeof body.unidad !== 'string') return 'Unidad requerida';
   if (body.stock != null && isNaN(Number(body.stock))) return 'Stock debe ser numérico';
+  if (body.image_url != null && typeof body.image_url !== 'string') return 'image_url debe ser string';
   return null;
 }
 
@@ -27,10 +28,10 @@ router.post('/', async (req, res) => {
   const error = validarProducto(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id } = req.body;
+    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = req.body;
     const result = await sql`
-      INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id)
-      VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null})
+      INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url)
+      VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null})
       RETURNING *
     `;
     res.status(201).json(result[0]);
@@ -55,9 +56,9 @@ router.put('/:id', async (req, res) => {
   const error = validarProducto(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id } = req.body;
+    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = req.body;
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}
+      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=${image_url || null}
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
