@@ -25,10 +25,12 @@ router.get('/', async (req, res) => {
 
 // Crear producto
 router.post('/', async (req, res) => {
-  const error = validarProducto(req.body);
+  // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
+  const payloadPost = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
+  const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = req.body;
+    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = payloadPost;
     const result = await sql`
       INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url)
       VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null})
@@ -56,7 +58,9 @@ router.put('/:id', async (req, res) => {
   const error = validarProducto(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = req.body;
+    // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
+    const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
+    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = payloadPut;
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
