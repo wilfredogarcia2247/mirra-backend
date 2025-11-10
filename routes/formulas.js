@@ -31,6 +31,8 @@ router.post('/', async (req, res) => {
   const error = validarFormula(req.body);
   if (error) return res.status(400).json({ error });
   try {
+    // Asegurar columna nombre en DB si por alguna razón la migración no se ejecutó
+    try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch (e) {}
     const { producto_terminado_id, componentes, nombre } = req.body;
     const formula = await sql`
       INSERT INTO formulas (producto_terminado_id, nombre)
@@ -57,6 +59,8 @@ router.put('/:id', async (req, res) => {
   const error = validarFormula(req.body);
   if (error) return res.status(400).json({ error });
   try {
+    // Asegurar columna nombre en DB si por alguna razón la migración no se ejecutó
+    try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch (e) {}
     const { producto_terminado_id, componentes, nombre } = req.body;
     await sql`BEGIN`;
     // Verificar que la fórmula exista
