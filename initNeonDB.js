@@ -174,8 +174,11 @@ async function initDB() {
       cantidad INT
     );`;
     // Asegurar columnas para snapshot de precio y costo en líneas de pedido (migración segura)
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_unitario NUMERIC;`; } catch(e) {}
+  // Remove legacy column precio_unitario if present
+  try { await sql`ALTER TABLE pedido_venta_productos DROP COLUMN IF EXISTS precio_unitario;`; } catch(e) {}
     try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
+  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
+  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS pedidos_compra (
       id SERIAL PRIMARY KEY,
       proveedor_id INT,

@@ -18,6 +18,10 @@ function validarPedido(body) {
 
 router.get('/', async (req, res) => {
   try {
+  // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
+  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
+  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
+  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
     const pedidos = await sql`SELECT * FROM pedidos_venta`;
     const pedidosConDetalle = [];
     for (const p of pedidos) {
@@ -159,13 +163,15 @@ router.post('/', async (req, res) => {
         VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${estado}, NOW(), ${tasaMontoVal}) RETURNING *
       `;
       for (const p of productos) {
-        // Obtener precio/costo al momento del pedido para snapshot
-        const prodRow = await sql`SELECT precio_venta, costo FROM productos WHERE id = ${p.producto_id}`;
+        // Obtener precio/costo/nombre al momento del pedido para snapshot
+        const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
         const precioUnitario = (prodRow && prodRow[0] && prodRow[0].precio_venta != null) ? prodRow[0].precio_venta : null;
         const costoUnitario = (prodRow && prodRow[0] && prodRow[0].costo != null) ? prodRow[0].costo : null;
+        const nombreProducto = (prodRow && prodRow[0] && prodRow[0].nombre != null) ? prodRow[0].nombre : null;
+        // Guardar snapshot: nombre y precio_venta
         await sql`
-          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, precio_unitario, costo_unitario)
-          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${precioUnitario}, ${costoUnitario})
+          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto)
+          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})
         `;
       }
       // Commit
@@ -174,8 +180,8 @@ router.post('/', async (req, res) => {
       // Recuperar y devolver pedido con detalle (como antes)
         const productosDetalle = await sql`
           SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
-                 prod.nombre AS producto_nombre,
-                 COALESCE(pv.precio_unitario, prod.precio_venta) AS precio_venta,
+                 COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+                 COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
                  COALESCE(pv.costo_unitario, prod.costo) AS costo,
                  prod.image_url
           FROM pedido_venta_productos pv
@@ -218,8 +224,8 @@ router.get('/:id', async (req, res) => {
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const productos = await sql`
       SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
-             prod.nombre AS producto_nombre,
-             COALESCE(pv.precio_unitario, prod.precio_venta) AS precio_venta,
+             COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+             COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo,
              prod.image_url
       FROM pedido_venta_productos pv
