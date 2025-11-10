@@ -181,4 +181,59 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// Añadir almacén a un producto y colocar existencia en una sola llamada
+// POST /api/productos/:id/almacen
+router.post('/:id/almacen', async (req, res) => {
+  const prodId = Number(req.params.id);
+  const { almacen_id, cantidad, motivo, referencia } = req.body || {};
+  if (isNaN(prodId)) return res.status(400).json({ error: 'ID de producto inválido' });
+  if (!almacen_id || isNaN(Number(almacen_id))) return res.status(400).json({ error: 'almacen_id requerido e inválido' });
+  if (cantidad == null || isNaN(Number(cantidad))) return res.status(400).json({ error: 'cantidad requerida y debe ser numérica' });
+  const qty = Number(cantidad);
+  if (qty < 0) return res.status(400).json({ error: 'cantidad debe ser >= 0 al crear inventario' });
+
+  try {
+    await sql`BEGIN`;
+    // Verificar producto
+    const prod = await sql`SELECT id FROM productos WHERE id = ${prodId} FOR NO KEY UPDATE`;
+    if (!prod || prod.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    // Verificar almacén
+    const alm = await sql`SELECT id, nombre FROM almacenes WHERE id = ${almacen_id} FOR NO KEY UPDATE`;
+    if (!alm || alm.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Almacén no encontrado' });
+    }
+    // Buscar inventario existente (bloqueo)
+    const invRows = await sql`SELECT * FROM inventario WHERE producto_id = ${prodId} AND almacen_id = ${almacen_id} FOR UPDATE`;
+    let inventory;
+    if (invRows && invRows.length > 0) {
+      // Si ya existe, incrementamos stock_fisico
+      const updated = await sql`
+        UPDATE inventario SET stock_fisico = stock_fisico + ${qty}
+        WHERE id = ${invRows[0].id}
+        RETURNING id, producto_id, almacen_id, stock_fisico, stock_comprometido
+      `;
+      inventory = updated[0];
+      await sql`COMMIT`;
+      return res.json({ success: true, message: 'Inventario actualizado', data: { ...inventory, stock_disponible: Number(inventory.stock_fisico) - Number(inventory.stock_comprometido), motivo: motivo || null, referencia: referencia || null } });
+    } else {
+      // Crear nuevo inventario con stock_comprometido = 0
+      const created = await sql`
+        INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido)
+        VALUES (${prodId}, ${almacen_id}, ${qty}, 0)
+        RETURNING id, producto_id, almacen_id, stock_fisico, stock_comprometido
+      `;
+      inventory = created[0];
+      await sql`COMMIT`;
+      return res.status(201).json({ success: true, message: 'Inventario creado', data: { ...inventory, stock_disponible: Number(inventory.stock_fisico) - Number(inventory.stock_comprometido), motivo: motivo || null, referencia: referencia || null } });
+    }
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) { /* ignore */ }
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
