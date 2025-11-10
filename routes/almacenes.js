@@ -5,7 +5,9 @@ const sql = neon(process.env.DATABASE_URL);
 
 function validarAlmacen(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
+  // Tipo sigue soportado por compatibilidad; ademas se puede usar el flag es_materia_prima
   if (!body.tipo || !['MateriaPrima', 'Venta'].includes(body.tipo)) return 'Tipo inválido';
+  if (body.es_materia_prima != null && typeof body.es_materia_prima !== 'boolean') return 'es_materia_prima debe ser booleano';
   if (body.ubicacion && typeof body.ubicacion !== 'string') return 'Ubicacion inválida';
   if (body.responsable && typeof body.responsable !== 'string') return 'Responsable inválido';
   return null;
@@ -24,10 +26,12 @@ router.post('/', async (req, res) => {
   const error = validarAlmacen(req.body);
   if (error) return res.status(400).json({ error });
   try {
-      const { nombre, tipo, ubicacion, responsable } = req.body;
+      const { nombre, tipo, ubicacion, responsable, es_materia_prima } = req.body;
+      // Mantener compatibilidad: si se envía es_materia_prima, sincronizar tipo
+      const finalTipo = es_materia_prima === true ? 'MateriaPrima' : (es_materia_prima === false ? 'Venta' : tipo);
       const result = await sql`
-        INSERT INTO almacenes (nombre, tipo, ubicacion, responsable)
-        VALUES (${nombre}, ${tipo}, ${ubicacion}, ${responsable}) RETURNING *
+        INSERT INTO almacenes (nombre, tipo, ubicacion, responsable, es_materia_prima)
+        VALUES (${nombre}, ${finalTipo}, ${ubicacion}, ${responsable}, ${es_materia_prima || false}) RETURNING *
       `;
     res.status(201).json(result[0]);
   } catch (err) {
@@ -49,9 +53,16 @@ router.put('/:id', async (req, res) => {
   const error = validarAlmacen(req.body);
   if (error) return res.status(400).json({ error });
   try {
-      const { nombre, tipo, ubicacion, responsable } = req.body;
+      const { nombre, tipo, ubicacion, responsable, es_materia_prima } = req.body;
+      // Si intentan cambiar el flag es_materia_prima y el almacen tiene movimientos, bloquear
+      if (es_materia_prima != null) {
+        const movimientos = await sql`SELECT COUNT(*)::int AS c FROM inventario_movimientos WHERE almacen_id = ${req.params.id}`;
+        const movCount = movimientos && movimientos[0] ? Number(movimientos[0].c) : 0;
+        if (movCount > 0) return res.status(400).json({ error: 'No se puede cambiar el tipo de almacén: existen movimientos registrados' });
+      }
+      const finalTipo = es_materia_prima === true ? 'MateriaPrima' : (es_materia_prima === false ? 'Venta' : tipo);
       const result = await sql`
-        UPDATE almacenes SET nombre=${nombre}, tipo=${tipo}, ubicacion=${ubicacion}, responsable=${responsable}
+        UPDATE almacenes SET nombre=${nombre}, tipo=${finalTipo}, ubicacion=${ubicacion}, responsable=${responsable}, es_materia_prima=${es_materia_prima != null ? es_materia_prima : sql`es_materia_prima`} 
         WHERE id = ${req.params.id} RETURNING *
       `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });

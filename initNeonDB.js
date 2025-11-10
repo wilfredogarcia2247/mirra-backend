@@ -82,6 +82,8 @@ async function initDB() {
     // Asegurar columnas en caso de migracion previa
     try { await sql`ALTER TABLE almacenes ADD COLUMN ubicacion VARCHAR(200);`; } catch(e) {}
     try { await sql`ALTER TABLE almacenes ADD COLUMN responsable VARCHAR(100);`; } catch(e) {}
+    // Asegurar columna es_materia_prima para indicar si el almacén es de materia prima (boolean)
+    try { await sql`ALTER TABLE almacenes ADD COLUMN es_materia_prima BOOLEAN DEFAULT FALSE;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS formulas (
       id SERIAL PRIMARY KEY,
       producto_terminado_id INT
