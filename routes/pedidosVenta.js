@@ -238,77 +238,146 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Completar un pedido de venta: consumir las reservas (stock_comprometido) en almacenes 'Venta'
-// POST /api/pedidos-venta/:id/completar
+// Helper transaccional para completar un pedido: consume reservas y marca Completado
+async function completarPedidoTransaccional(pedidoId) {
+  await sql`BEGIN`;
+  const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+  if (!pedidoRows || pedidoRows.length === 0) {
+    await sql`ROLLBACK`;
+    const e = new Error('Pedido no encontrado'); e.code = 'NOT_FOUND'; throw e;
+  }
+  const pedido = pedidoRows[0];
+  if (pedido.estado === 'Completado') {
+    await sql`ROLLBACK`;
+    const e = new Error('Pedido ya completado'); e.code = 'ALREADY_COMPLETED'; throw e;
+  }
+
+  const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+  const movimientos = [];
+
+  for (const linea of lineas) {
+    let qtyNeeded = Number(linea.cantidad);
+    if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
+      await sql`ROLLBACK`;
+      const e = new Error('Cantidad inválida en líneas del pedido'); e.code = 'INVALID_QTY'; throw e;
+    }
+    const invs = await sql`
+      SELECT i.* FROM inventario i
+      JOIN almacenes a ON a.id = i.almacen_id
+      WHERE i.producto_id = ${linea.producto_id} AND a.tipo = 'Venta' AND i.stock_comprometido > 0
+      ORDER BY i.stock_comprometido DESC
+      FOR UPDATE
+    `;
+    for (const inv of invs) {
+      if (qtyNeeded <= 0) break;
+      const committed = Number(inv.stock_comprometido);
+      if (committed <= 0) continue;
+      const take = Math.min(committed, qtyNeeded);
+      const consumed = await sql`
+        UPDATE inventario
+        SET stock_fisico = stock_fisico - ${take}, stock_comprometido = stock_comprometido - ${take}
+        WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0 AND stock_comprometido >= ${take}
+        RETURNING id, stock_fisico, stock_comprometido, almacen_id
+      `;
+      if (!consumed || consumed.length === 0) {
+        await sql`ROLLBACK`;
+        const e = new Error(`No se pudo consumir inventario reservado para producto ${linea.producto_id}`); e.code = 'INVENTORY_CONFLICT'; throw e;
+      }
+      await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+      movimientos.push({ producto_id: linea.producto_id, almacen_id: inv.almacen_id, cantidad: take });
+      qtyNeeded -= take;
+    }
+    if (qtyNeeded > 0) {
+      await sql`ROLLBACK`;
+      const e = new Error(`Stock comprometido insuficiente para producto ${linea.producto_id}`); e.code = 'INSUFFICIENT_RESERVED'; throw e;
+    }
+  }
+
+  await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
+  await sql`COMMIT`;
+  return { success: true, pedido_id: pedidoId, movimientos };
+}
+
+// POST /api/pedidos-venta/:id/completar (usa helper transaccional)
 router.post('/:id/completar', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
   try {
-    await sql`BEGIN`;
-    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
-    if (!pedidoRows || pedidoRows.length === 0) {
-      await sql`ROLLBACK`;
-      return res.status(404).json({ error: 'Pedido no encontrado' });
-    }
-    const pedido = pedidoRows[0];
-    if (pedido.estado === 'Completado') {
-      await sql`ROLLBACK`;
-      return res.status(400).json({ error: 'Pedido ya completado' });
-    }
-
-    // Obtener líneas del pedido
-    const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
-    const movimientos = [];
-
-    for (const linea of lineas) {
-      let qtyNeeded = Number(linea.cantidad);
-      if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
-        await sql`ROLLBACK`;
-        return res.status(400).json({ error: 'Cantidad inválida en líneas del pedido' });
-      }
-      // Obtener inventarios de tipo Venta donde hay stock_comprometido (reservas), bloquear filas
-      const invs = await sql`
-        SELECT i.* FROM inventario i
-        JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${linea.producto_id} AND a.tipo = 'Venta' AND i.stock_comprometido > 0
-        ORDER BY i.stock_comprometido DESC
-        FOR UPDATE
-      `;
-      for (const inv of invs) {
-        if (qtyNeeded <= 0) break;
-        const committed = Number(inv.stock_comprometido);
-        if (committed <= 0) continue;
-        const take = Math.min(committed, qtyNeeded);
-        // Consumir de forma segura: asegurar que stock_fisico no quede negativo y stock_comprometido suficiente
-        const consumed = await sql`
-          UPDATE inventario
-          SET stock_fisico = stock_fisico - ${take}, stock_comprometido = stock_comprometido - ${take}
-          WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0 AND stock_comprometido >= ${take}
-          RETURNING id, stock_fisico, stock_comprometido, almacen_id
-        `;
-        if (!consumed || consumed.length === 0) {
-          await sql`ROLLBACK`;
-          return res.status(400).json({ error: `No se pudo consumir inventario reservado para producto ${linea.producto_id}` });
-        }
-        // Registrar movimiento
-        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
-        movimientos.push({ producto_id: linea.producto_id, almacen_id: inv.almacen_id, cantidad: take });
-        qtyNeeded -= take;
-      }
-      if (qtyNeeded > 0) {
-        // Esto indica inconsistencia: se habían reservado menos de lo esperado o consumido por otro proceso
-        await sql`ROLLBACK`;
-        return res.status(400).json({ error: `Stock comprometido insuficiente para producto ${linea.producto_id}` });
-      }
-    }
-
-    // Marcar pedido como Completado
-    await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
-    await sql`COMMIT`;
-    return res.json({ success: true, pedido_id: pedidoId, movimientos });
+    const result = await completarPedidoTransaccional(pedidoId);
+    return res.json(result);
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
+    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
+    if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+    console.error(err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/pedidos-venta/:id/status -> cambiar estado con lógica (verificar reservas para 'Enviado', ejecutar completar para 'Completado')
+router.put('/:id/status', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  const { estado } = req.body;
+  const allowed = ['Pendiente', 'Enviado', 'Completado', 'Cancelado'];
+  if (!estado || !allowed.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
+  try {
+    // Obtener pedido y bloquear
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const pedido = pedidoRows[0];
+
+    const transitions = {
+      Pendiente: ['Enviado', 'Completado', 'Cancelado'],
+      Enviado: ['Completado', 'Cancelado'],
+      Completado: [],
+      Cancelado: []
+    };
+    if (pedido.estado === estado) return res.json({ success: true, estado });
+    if (!transitions[pedido.estado] || !transitions[pedido.estado].includes(estado)) return res.status(400).json({ error: `Transición inválida: ${pedido.estado} -> ${estado}` });
+
+    // Si se marca como Enviado, verificar que exista stock_comprometido suficiente por producto
+    if (estado === 'Enviado') {
+      const faltantes = [];
+      const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+      for (const linea of lineas) {
+        const sumRes = await sql`SELECT COALESCE(SUM(stock_comprometido),0) AS comprometido FROM inventario WHERE producto_id = ${linea.producto_id}`;
+        const comprometido = (sumRes && sumRes[0] && Number(sumRes[0].comprometido)) || 0;
+        if (comprometido < Number(linea.cantidad)) {
+          faltantes.push({ producto_id: linea.producto_id, comprometido, requerido: Number(linea.cantidad) });
+        }
+      }
+      if (faltantes.length > 0) return res.status(400).json({ error: 'Stock comprometido insuficiente para enviar', faltantes });
+      await sql`UPDATE pedidos_venta SET estado = 'Enviado' WHERE id = ${pedidoId}`;
+      return res.json({ success: true, estado: 'Enviado' });
+    }
+
+    // Si se solicita Completado, reutilizar la función transaccional
+    if (estado === 'Completado') {
+      try {
+        const result = await completarPedidoTransaccional(pedidoId);
+        return res.json(result);
+      } catch (err) {
+        if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
+        if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
+        if (err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
+        if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+        console.error(err);
+        return res.status(500).json({ error: 'Error completando pedido' });
+      }
+    }
+
+    // Cancelado u otros estados: actualizar sin efectos secundarios
+    if (estado === 'Cancelado') {
+      await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
+      return res.json({ success: true, estado: 'Cancelado' });
+    }
+
+    return res.status(400).json({ error: 'Acción no implementada para este estado' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error cambiando estado del pedido' });
   }
 });
 
