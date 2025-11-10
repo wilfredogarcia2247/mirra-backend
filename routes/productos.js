@@ -57,8 +57,10 @@ router.put('/:id', async (req, res) => {
   if (error) return res.status(400).json({ error });
   try {
     const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = req.body;
+    // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
+    // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=${image_url || null}
+      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=COALESCE(${image_url}, image_url)
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
