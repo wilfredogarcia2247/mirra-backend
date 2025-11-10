@@ -154,7 +154,26 @@ router.put('/:id', async (req, res) => {
 // Eliminar producto
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await sql`DELETE FROM productos WHERE id = ${req.params.id} RETURNING *`;
+    const prodId = Number(req.params.id);
+    if (isNaN(prodId)) return res.status(400).json({ error: 'ID inválido' });
+    // 1) Verificar stock en inventario
+    const stockRows = await sql`SELECT COALESCE(SUM(stock_fisico - stock_comprometido),0) AS disponible FROM inventario WHERE producto_id = ${prodId}`;
+    const disponible = stockRows && stockRows[0] ? Number(stockRows[0].disponible) : 0;
+    if (disponible > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: existe stock en inventario' });
+    // 2) Verificar que el producto no esté en pedidos de venta
+    const pv = await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE producto_id = ${prodId}`;
+    if (pv && pv[0] && Number(pv[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de venta' });
+    // 3) Verificar que el producto no esté en pedidos de compra
+    const pc = await sql`SELECT COUNT(*)::int AS c FROM pedido_compra_productos WHERE producto_id = ${prodId}`;
+    if (pc && pc[0] && Number(pc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de compra' });
+    // 4) Verificar que no sea materia prima en una fórmula
+    const fc = await sql`SELECT COUNT(*)::int AS c FROM formula_componentes WHERE materia_prima_id = ${prodId}`;
+    if (fc && fc[0] && Number(fc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: se usa como materia prima en una fórmula' });
+    // 5) Verificar que no sea producto terminado en una fórmula
+    const ff = await sql`SELECT COUNT(*)::int AS c FROM formulas WHERE producto_terminado_id = ${prodId}`;
+    if (ff && ff[0] && Number(ff[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está referenciado en una fórmula' });
+
+    const result = await sql`DELETE FROM productos WHERE id = ${prodId} RETURNING *`;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
     res.json({ eliminado: true, producto: result[0] });
   } catch (err) {
