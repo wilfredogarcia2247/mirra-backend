@@ -23,7 +23,7 @@ router.post('/', async (req, res) => {
   const error = validarPedido(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { cliente_id, productos, estado, nombre_cliente, telefono, cedula } = req.body;
+  const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
     const clienteIdValue = (cliente_id == null || Number(cliente_id) === 0) ? null : Number(cliente_id);
     const forcedEstado = 'Pendiente';
@@ -102,10 +102,12 @@ router.post('/', async (req, res) => {
           }
         }
       }
+      const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
+
       // Insertar pedido público
       const pedido = await sql`
-        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent)
-        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}) RETURNING *
+        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
+        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}, ${tasaMontoVal}) RETURNING *
       `;
       for (const p of productos) {
         await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad})`;

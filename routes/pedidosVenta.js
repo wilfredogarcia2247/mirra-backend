@@ -62,7 +62,7 @@ router.post('/', async (req, res) => {
   const error = validarPedido(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { cliente_id, productos, estado, nombre_cliente, telefono, cedula } = req.body;
+  const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Ejecutar en transacción: reservar stock de venta, crear orden de producción si hace falta y crear pedido
     await sql`BEGIN`;
     try {
@@ -150,9 +150,11 @@ router.post('/', async (req, res) => {
       }
 
       // Si llegamos aquí, todo reservado/ordenado correctamente -> insertar pedido y sus líneas
+      const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
+
       const pedido = await sql`
-        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha)
-        VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${estado}, NOW()) RETURNING *
+        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, tasa_cambio_monto)
+        VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${estado}, NOW(), ${tasaMontoVal}) RETURNING *
       `;
       for (const p of productos) {
         await sql`

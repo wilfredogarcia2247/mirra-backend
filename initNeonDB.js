@@ -161,6 +161,12 @@ async function initDB() {
     try { await sql`ALTER TABLE pedidos_venta ADD COLUMN cedula TEXT;`; } catch(e) {}
     try { await sql`ALTER TABLE pedidos_venta ADD COLUMN origen_ip TEXT;`; } catch(e) {}
     try { await sql`ALTER TABLE pedidos_venta ADD COLUMN user_agent TEXT;`; } catch(e) {}
+  // Agregar columna para snapshot del valor de la tasa de cambio en pedidos_venta
+  // Solo almacenamos el monto (decimal) de la tasa en el momento del pedido
+  try { await sql`ALTER TABLE pedidos_venta ADD COLUMN tasa_cambio_monto NUMERIC;`; } catch(e) {}
+  // Remover columnas previas si existen (tasa_cambio_id, tasa_cambio_simbolo) — ahora no las usamos
+  try { await sql`ALTER TABLE pedidos_venta DROP COLUMN IF EXISTS tasa_cambio_id;`; } catch(e) {}
+  try { await sql`ALTER TABLE pedidos_venta DROP COLUMN IF EXISTS tasa_cambio_simbolo;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS pedido_venta_productos (
       id SERIAL PRIMARY KEY,
       pedido_venta_id INT,

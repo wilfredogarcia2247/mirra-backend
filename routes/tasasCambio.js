@@ -58,8 +58,9 @@ router.post('/', async (req, res) => {
       return res.status(201).json(created[0]);
     }
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Error creando tasa' });
+    console.error('Error creando tasa:', err && err.message ? err.message : err);
+    // Return detailed message to help frontend debug (can be softened later)
+    return res.status(500).json({ error: err && err.message ? err.message : 'Error creando tasa' });
   }
 });
 
@@ -115,8 +116,8 @@ router.put('/:id', async (req, res) => {
       return res.json(updated[0]);
     }
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Error actualizando tasa' });
+    console.error('Error actualizando tasa:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: err && err.message ? err.message : 'Error actualizando tasa' });
   }
 });
 
@@ -129,8 +130,8 @@ router.delete('/:id', async (req, res) => {
     if (!deleted || deleted.length === 0) return res.status(404).json({ error: 'No encontrado' });
     return res.json({ success: true, deleted: deleted[0] });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Error eliminando tasa' });
+    console.error('Error eliminando tasa:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: err && err.message ? err.message : 'Error eliminando tasa' });
   }
 });
 
