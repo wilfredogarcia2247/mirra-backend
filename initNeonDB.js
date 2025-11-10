@@ -112,6 +112,15 @@ async function initDB() {
       stock_fisico INT,
       stock_comprometido INT
     );`;
+    // Tabla para tasas de cambio
+    await sql`CREATE TABLE IF NOT EXISTS tasas_cambio (
+      id SERIAL PRIMARY KEY,
+      monto NUMERIC NOT NULL,
+      simbolo VARCHAR(10) NOT NULL,
+      descripcion TEXT,
+      creado_en TIMESTAMP DEFAULT NOW(),
+      actualizado_en TIMESTAMP
+    );`;
     // Tabla de movimientos de inventario para auditoría
     await sql`CREATE TABLE IF NOT EXISTS inventario_movimientos (
       id SERIAL PRIMARY KEY,
