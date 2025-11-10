@@ -455,11 +455,53 @@ router.post('/:id/cancelar', async (req, res) => {
         warnings.push({ producto_id: linea.producto_id, restante_no_liberado: qtyToRelease });
       }
     }
+    // Después de liberar, recalcular stock_comprometido por producto para evitar inconsistencias
+    const productosARecalcular = [...new Set(lineas.map(l => l.producto_id))];
+    const recalculations = [];
+    for (const prodId of productosARecalcular) {
+      // Expected comprometido = sum de cantidades en pedidos activos (Pendiente, Enviado)
+      const sumRes = await sql`
+        SELECT COALESCE(SUM(pvprod.cantidad),0) AS esperado
+        FROM pedido_venta_productos pvprod
+        JOIN pedidos_venta pv ON pv.id = pvprod.pedido_venta_id
+        WHERE pvprod.producto_id = ${prodId} AND pv.estado IN ('Pendiente','Enviado')
+      `;
+      const esperado = (sumRes && sumRes[0] && Number(sumRes[0].esperado)) || 0;
+
+      // Obtener inventarios para el producto y bloquearlos
+      const invs = await sql`
+        SELECT * FROM inventario WHERE producto_id = ${prodId} ORDER BY stock_fisico DESC FOR UPDATE
+      `;
+      // Resetear comprometido y redistribuir según 'esperado'
+      let remaining = esperado;
+      let totalAvailable = 0;
+      for (const inv of invs) totalAvailable += Number(inv.stock_fisico);
+      const adjustments = [];
+      if (invs.length === 0) {
+        recalculations.push({ producto_id: prodId, esperado, totalAvailable: 0, note: 'No hay inventario registrado para este producto' });
+        continue;
+      }
+      for (const inv of invs) {
+        if (remaining <= 0) {
+          // asegurar que quede 0 comprometido
+          if (Number(inv.stock_comprometido) !== 0) {
+            await sql`UPDATE inventario SET stock_comprometido = 0 WHERE id = ${inv.id}`;
+            adjustments.push({ almacen_id: inv.almacen_id, id: inv.id, set_to: 0 });
+          }
+          continue;
+        }
+        const assign = Math.min(Number(inv.stock_fisico), remaining);
+        await sql`UPDATE inventario SET stock_comprometido = ${assign} WHERE id = ${inv.id}`;
+        adjustments.push({ almacen_id: inv.almacen_id, id: inv.id, set_to: assign });
+        remaining -= assign;
+      }
+      recalculations.push({ producto_id: prodId, esperado, totalAvailable, adjustments, remaining_not_assigned: remaining });
+    }
 
     // Finalmente marcar pedido como Cancelado
     await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
     await sql`COMMIT`;
-    return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings });
+    return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings, recalculations });
   } catch (err) {
     try { await sql`ROLLBACK`; } catch(e) {}
     console.error('Error cancelando pedido:', err);
