@@ -99,7 +99,17 @@ router.post('/:id/completar', async (req, res) => {
         if (available <= 0) continue;
         const take = Math.min(available, required);
         // Restar stock_fisico
-        await sql`UPDATE inventario SET stock_fisico = stock_fisico - ${take}, stock_comprometido = GREATEST(0, stock_comprometido - ${take}) WHERE id = ${inv.id}`;
+        // Consumir de forma segura: no dejar stock negativo
+        const consumed = await sql`
+          UPDATE inventario
+          SET stock_fisico = stock_fisico - ${take}, stock_comprometido = GREATEST(0, stock_comprometido - ${take})
+          WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0
+          RETURNING id, stock_fisico, stock_comprometido
+        `;
+        if (!consumed || consumed.length === 0) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: `Inventario insuficiente al consumir materia prima id ${comp.materia_prima_id}` });
+        }
         // Registrar movimiento
         await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${comp.materia_prima_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Producción orden ' + ordenId})`;
         movimientos.push({ materia_prima_id: comp.materia_prima_id, almacen_id: inv.almacen_id, cantidad: take });
