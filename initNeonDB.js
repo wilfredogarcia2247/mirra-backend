@@ -70,6 +70,8 @@ async function initDB() {
       precio_venta NUMERIC,
       proveedor_id INT
     );`;
+    // Asegurar la columna image_url en productos (migración segura)
+    try { await sql`ALTER TABLE productos ADD COLUMN image_url TEXT;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS almacenes (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
