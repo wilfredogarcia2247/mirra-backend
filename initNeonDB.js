@@ -108,6 +108,17 @@ async function initDB() {
       stock_fisico INT,
       stock_comprometido INT
     );`;
+    // Tabla de movimientos de inventario para auditoría
+    await sql`CREATE TABLE IF NOT EXISTS inventario_movimientos (
+      id SERIAL PRIMARY KEY,
+      producto_id INT,
+      almacen_id INT,
+      tipo VARCHAR(20), -- 'entrada'|'salida'
+      cantidad NUMERIC,
+      motivo TEXT,
+      referencia TEXT,
+      creado_en TIMESTAMP DEFAULT NOW()
+    );`;
     await sql`CREATE TABLE IF NOT EXISTS contactos (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
