@@ -406,16 +406,64 @@ router.post('/:id/cancelar', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
   try {
+    // Hacer liberación de reservas en una transacción para recalcular stock_comprometido
+    await sql`BEGIN`;
     const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
-    if (!pedidoRows || pedidoRows.length === 0) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!pedidoRows || pedidoRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
     const pedido = pedidoRows[0];
-    if (pedido.estado === 'Completado') return res.status(400).json({ error: 'No se puede cancelar un pedido ya completado' });
+    if (pedido.estado === 'Completado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'No se puede cancelar un pedido ya completado' });
+    }
 
+    const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+    const liberaciones = [];
+    const warnings = [];
+
+    for (const linea of lineas) {
+      let qtyToRelease = Number(linea.cantidad);
+      if (isNaN(qtyToRelease) || qtyToRelease <= 0) {
+        await sql`ROLLBACK`;
+        return res.status(400).json({ error: 'Cantidad inválida en líneas del pedido' });
+      }
+      // Buscar inventarios donde haya stock_comprometido para este producto
+      const invs = await sql`
+        SELECT i.* FROM inventario i
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE i.producto_id = ${linea.producto_id} AND i.stock_comprometido > 0
+        ORDER BY i.stock_comprometido DESC
+        FOR UPDATE
+      `;
+      let releasedForLine = 0;
+      for (const inv of invs) {
+        if (qtyToRelease <= 0) break;
+        const committed = Number(inv.stock_comprometido);
+        if (committed <= 0) continue;
+        const take = Math.min(committed, qtyToRelease);
+        await sql`UPDATE inventario SET stock_comprometido = stock_comprometido - ${take} WHERE id = ${inv.id}`;
+        // Registrar movimiento de inventario para auditoría (tipo 'entrada' indica liberación/retorno a disponible)
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id}, ${inv.almacen_id}, 'entrada', ${take}, ${'Liberación reserva pedido ' + pedidoId})`;
+        liberaciones.push({ producto_id: linea.producto_id, almacen_id: inv.almacen_id, cantidad: take });
+        releasedForLine += take;
+        qtyToRelease -= take;
+      }
+      if (qtyToRelease > 0) {
+        // No había suficiente stock_comprometido registrado — anotar warning y continuar
+        warnings.push({ producto_id: linea.producto_id, restante_no_liberado: qtyToRelease });
+      }
+    }
+
+    // Finalmente marcar pedido como Cancelado
     await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
-    return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: false, note: 'Las reservas (stock_comprometido) no se liberan automáticamente en esta versión' });
+    await sql`COMMIT`;
+    return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Error cancelando pedido' });
+    try { await sql`ROLLBACK`; } catch(e) {}
+    console.error('Error cancelando pedido:', err);
+    return res.status(500).json({ error: 'Error cancelando pedido', detail: err.message });
   }
 });
 
