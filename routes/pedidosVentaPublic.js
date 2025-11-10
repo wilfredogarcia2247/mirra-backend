@@ -24,27 +24,126 @@ router.post('/', async (req, res) => {
   if (error) return res.status(400).json({ error });
   try {
     const { cliente_id, productos, estado, nombre_cliente, telefono, cedula } = req.body;
-    // Insertar incluyendo campos opcionales nombre_cliente, telefono y cedula
-  // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
-  // Forzamos estado a 'Pendiente' para pedidos públicos
-  const clienteIdValue = (cliente_id == null || Number(cliente_id) === 0) ? null : Number(cliente_id);
+    // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
+    const clienteIdValue = (cliente_id == null || Number(cliente_id) === 0) ? null : Number(cliente_id);
     const forcedEstado = 'Pendiente';
     // Capturar IP y User-Agent para trazabilidad
     const origenIp = (req.headers['x-forwarded-for'] || req.ip || '').toString();
     const userAgent = (req.headers['user-agent'] || '').toString();
 
-    const pedido = await sql`
-      INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent)
-      VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}) RETURNING *
-    `;
-    for (const p of productos) {
-      await sql`
-        INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad)
-        VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad})
+    // Ejecutar en transacción similar a la variante protegida: reservar stock de venta y crear órdenes de producción si hace falta
+    await sql`BEGIN`;
+    try {
+      const produccionesCreadas = [];
+      for (const p of productos) {
+        let qtyNeeded = Number(p.cantidad);
+        if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: 'Cantidad inválida en productos' });
+        }
+        const inventariosVenta = await sql`
+          SELECT i.* FROM inventario i
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE i.producto_id = ${p.producto_id} AND a.tipo = 'Venta'
+          ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+        `;
+        for (const inv of inventariosVenta) {
+          const disponible = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+          if (disponible <= 0) continue;
+          const take = Math.min(disponible, qtyNeeded);
+          await sql`UPDATE inventario SET stock_comprometido = stock_comprometido + ${take} WHERE id = ${inv.id}`;
+          qtyNeeded -= take;
+          if (qtyNeeded === 0) break;
+        }
+        if (qtyNeeded > 0) {
+          const formula = await sql`SELECT * FROM formulas WHERE producto_terminado_id = ${p.producto_id}`;
+          if (formula.length === 0) {
+            await sql`ROLLBACK`;
+            return res.status(400).json({ error: `Producto ${p.producto_id} sin stock suficiente y sin fórmula para producir` });
+          }
+          const formulaId = formula[0].id;
+          const componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${formulaId}`;
+          for (const comp of componentes) {
+            const required = Number(comp.cantidad) * qtyNeeded;
+            const mpInventarios = await sql`
+              SELECT i.* FROM inventario i
+              JOIN almacenes a ON a.id = i.almacen_id
+              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'MateriaPrima'
+              ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+            `;
+            let totalDisponible = 0;
+            for (const inv of mpInventarios) totalDisponible += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+            if (totalDisponible < required) {
+              await sql`ROLLBACK`;
+              return res.status(400).json({ error: `Materia prima ${comp.materia_prima_id} insuficiente para producir producto ${p.producto_id}` });
+            }
+          }
+          const orden = await sql`
+            INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
+            VALUES (${p.producto_id}, ${qtyNeeded}, ${formulaId}, 'Pendiente', NOW()) RETURNING *
+          `;
+          produccionesCreadas.push(orden[0]);
+          for (const comp of componentes) {
+            let required = Number(comp.cantidad) * qtyNeeded;
+            const mpInventarios = await sql`
+              SELECT i.* FROM inventario i
+              JOIN almacenes a ON a.id = i.almacen_id
+              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'MateriaPrima'
+              ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+            `;
+            for (const inv of mpInventarios) {
+              if (required <= 0) break;
+              const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+              if (available <= 0) continue;
+              const take = Math.min(available, required);
+              await sql`UPDATE inventario SET stock_comprometido = stock_comprometido + ${take} WHERE id = ${inv.id}`;
+              required -= take;
+            }
+          }
+        }
+      }
+      // Insertar pedido público
+      const pedido = await sql`
+        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent)
+        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}) RETURNING *
       `;
+      for (const p of productos) {
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad})`;
+      }
+      await sql`COMMIT`;
+
+      const productosDetalle = await sql`
+        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
+               prod.nombre AS producto_nombre, prod.precio_venta, prod.costo, prod.image_url
+        FROM pedido_venta_productos pv
+        LEFT JOIN productos prod ON prod.id = pv.producto_id
+        WHERE pv.pedido_venta_id = ${pedido[0].id}
+      `;
+      let total = 0;
+      const productosMapeados = productosDetalle.map(item => {
+        const cantidad = Number(item.cantidad);
+        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+        const costo = item.costo != null ? parseFloat(item.costo) : null;
+        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+        total += subtotal;
+        return {
+          id: item.id,
+          pedido_venta_id: item.pedido_venta_id,
+          producto_id: item.producto_id,
+          cantidad,
+          producto_nombre: item.producto_nombre,
+          precio_venta: isNaN(precio) ? null : precio,
+          costo: costo,
+          image_url: item.image_url,
+          subtotal
+        };
+      });
+      const pedidoObj = { ...pedido[0], productos: productosMapeados, total, producciones: produccionesCreadas };
+      res.status(201).json(pedidoObj);
+    } catch (errTx) {
+      try { await sql`ROLLBACK`; } catch (e) {}
+      throw errTx;
     }
-    pedido[0].productos = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedido[0].id}`;
-    res.status(201).json(pedido[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
