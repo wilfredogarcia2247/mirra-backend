@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { spawn } = require('child_process');
 
 function validarPedido(body) {
   if (!body.cliente_id || isNaN(Number(body.cliente_id))) return 'ID de cliente requerido';
@@ -501,7 +502,22 @@ router.post('/:id/cancelar', async (req, res) => {
     // Finalmente marcar pedido como Cancelado
     await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
     await sql`COMMIT`;
-    return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings, recalculations });
+
+    // Ejecutar recalculo global en background para asegurar consistencia en todos los productos
+    try {
+      const child = spawn(process.execPath, ['scripts/recalculate_comprometido.js', '--yes'], {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: 'ignore'
+      });
+      child.unref();
+      // indicar en la respuesta que el recalculo fue programado
+      return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings, recalculations, recalculo_disparado: true });
+    } catch (errSpawn) {
+      // Si no se pudo disparar el proceso, devolver igualmente éxito pero con nota
+      console.error('No se pudo disparar recalculo en background:', errSpawn);
+      return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings, recalculations, recalculo_disparado: false, recalculo_error: errSpawn.message });
+    }
   } catch (err) {
     try { await sql`ROLLBACK`; } catch(e) {}
     console.error('Error cancelando pedido:', err);
