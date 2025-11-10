@@ -86,6 +86,8 @@ async function initDB() {
       id SERIAL PRIMARY KEY,
       producto_terminado_id INT
     );`;
+    // Asegurar columna nombre en formulas (migración segura)
+    try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS formula_componentes (
       id SERIAL PRIMARY KEY,
       formula_id INT,

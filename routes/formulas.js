@@ -5,6 +5,7 @@ const sql = neon(process.env.DATABASE_URL);
 
 function validarFormula(body) {
   if (!body.producto_terminado_id || isNaN(Number(body.producto_terminado_id))) return 'ID de producto terminado requerido';
+  if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre de fórmula requerido';
   if (!Array.isArray(body.componentes) || body.componentes.length === 0) return 'Componentes requeridos';
   for (const c of body.componentes) {
     if (!c.materia_prima_id || isNaN(Number(c.materia_prima_id))) return 'ID de materia prima requerido';
@@ -30,10 +31,10 @@ router.post('/', async (req, res) => {
   const error = validarFormula(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { producto_terminado_id, componentes } = req.body;
+    const { producto_terminado_id, componentes, nombre } = req.body;
     const formula = await sql`
-      INSERT INTO formulas (producto_terminado_id)
-      VALUES (${producto_terminado_id}) RETURNING *
+      INSERT INTO formulas (producto_terminado_id, nombre)
+      VALUES (${producto_terminado_id}, ${nombre}) RETURNING *
     `;
     for (const c of componentes) {
       await sql`
@@ -56,7 +57,7 @@ router.put('/:id', async (req, res) => {
   const error = validarFormula(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { producto_terminado_id, componentes } = req.body;
+    const { producto_terminado_id, componentes, nombre } = req.body;
     await sql`BEGIN`;
     // Verificar que la fórmula exista
     const f = await sql`SELECT * FROM formulas WHERE id = ${formulaId} FOR NO KEY UPDATE`;
@@ -65,7 +66,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Fórmula no encontrada' });
     }
     // Actualizar producto_terminado_id
-    await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id} WHERE id = ${formulaId}`;
+  await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre} WHERE id = ${formulaId}`;
     // Reemplazar componentes: eliminar existentes e insertar nuevos
     await sql`DELETE FROM formula_componentes WHERE formula_id = ${formulaId}`;
     for (const c of componentes) {
