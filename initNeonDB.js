@@ -173,6 +173,9 @@ async function initDB() {
       producto_id INT,
       cantidad INT
     );`;
+    // Asegurar columnas para snapshot de precio y costo en líneas de pedido (migración segura)
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_unitario NUMERIC;`; } catch(e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS pedidos_compra (
       id SERIAL PRIMARY KEY,
       proveedor_id INT,

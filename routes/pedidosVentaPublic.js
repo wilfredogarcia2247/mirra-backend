@@ -112,13 +112,20 @@ router.post('/', async (req, res) => {
         VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}, ${tasaMontoVal}) RETURNING *
       `;
       for (const p of productos) {
-        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad})`;
+        // Obtener precio/costo actual para snapshot en pedido público
+        const prodRow = await sql`SELECT precio_venta, costo FROM productos WHERE id = ${p.producto_id}`;
+        const precioUnitario = (prodRow && prodRow[0] && prodRow[0].precio_venta != null) ? prodRow[0].precio_venta : null;
+        const costoUnitario = (prodRow && prodRow[0] && prodRow[0].costo != null) ? prodRow[0].costo : null;
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, precio_unitario, costo_unitario) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${precioUnitario}, ${costoUnitario})`;
       }
       await sql`COMMIT`;
 
       const productosDetalle = await sql`
         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
-               prod.nombre AS producto_nombre, prod.precio_venta, prod.costo, prod.image_url
+               prod.nombre AS producto_nombre,
+               COALESCE(pv.precio_unitario, prod.precio_venta) AS precio_venta,
+               COALESCE(pv.costo_unitario, prod.costo) AS costo,
+               prod.image_url
         FROM pedido_venta_productos pv
         LEFT JOIN productos prod ON prod.id = pv.producto_id
         WHERE pv.pedido_venta_id = ${pedido[0].id}
