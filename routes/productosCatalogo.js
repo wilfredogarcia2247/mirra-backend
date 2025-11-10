@@ -41,17 +41,35 @@ router.get('/', async (req, res) => {
     }
 
     // Enriquecer cada producto con inventario por almacén (opcional para front)
-    const enriched = [];
-    for (const prod of result) {
-      const inv = await sql`
-        SELECT i.id, i.producto_id, i.almacen_id, i.stock_fisico, i.stock_comprometido,
-               (i.stock_fisico - i.stock_comprometido) AS stock_disponible,
-               a.nombre AS almacen_nombre, a.tipo AS almacen_tipo
+    // Obtener productos con inventario agregado en una sola consulta para rendimiento
+    const prodIds = (result || []).map(r => r.id);
+    if (prodIds.length === 0) return res.json([]);
+    const rows = await sql`
+      SELECT p.*, COALESCE(inv_tot.stock_disponible_total, 0) AS stock, COALESCE(inv_arr.inventario, '[]'::json) AS inventario
+      FROM productos p
+      LEFT JOIN (
+        SELECT producto_id, json_agg(json_build_object(
+          'id', i.id,
+          'almacen_id', i.almacen_id,
+          'almacen_nombre', a.nombre,
+          'almacen_tipo', a.tipo,
+          'stock_fisico', i.stock_fisico,
+          'stock_comprometido', i.stock_comprometido,
+          'stock_disponible', (i.stock_fisico - i.stock_comprometido)
+        ) ORDER BY (i.stock_fisico - i.stock_comprometido) DESC) AS inventario
         FROM inventario i
         LEFT JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${prod.id}
-      `;
-      const inventarioMapeado = (inv || []).map(i => ({
+        GROUP BY producto_id
+      ) inv_arr ON inv_arr.producto_id = p.id
+      LEFT JOIN (
+        SELECT producto_id, SUM(i.stock_fisico - i.stock_comprometido) AS stock_disponible_total
+        FROM inventario i
+        GROUP BY producto_id
+      ) inv_tot ON inv_tot.producto_id = p.id
+      WHERE p.id = ANY(${prodIds})
+    `;
+    const enriched = (rows || []).map(p => {
+      const inventario = (p.inventario && Array.isArray(p.inventario)) ? p.inventario.map(i => ({
         id: i.id,
         almacen_id: i.almacen_id,
         almacen_nombre: i.almacen_nombre,
@@ -59,9 +77,9 @@ router.get('/', async (req, res) => {
         stock_fisico: Number(i.stock_fisico),
         stock_comprometido: Number(i.stock_comprometido),
         stock_disponible: Number(i.stock_disponible)
-      }));
-      enriched.push({ ...prod, inventario: inventarioMapeado });
-    }
+      })) : [];
+      return { ...p, stock: Number(p.stock), inventario };
+    });
     res.json(enriched);
   } catch (err) {
     console.error('Error en /api/productos/catalogo', err);
