@@ -7,8 +7,10 @@ const sql = neon(process.env.DATABASE_URL);
 function validarPedido(body) {
   // Para pedidos públicos `cliente_id` es opcional (puede venir null/0).
   if (body.cliente_id != null && body.cliente_id !== '' && isNaN(Number(body.cliente_id))) return 'ID de cliente inválido';
-  if (!Array.isArray(body.productos) || body.productos.length === 0) return 'Productos requeridos';
-  for (const p of body.productos) {
+  // Aceptamos compatiblemente `productos` o `lineas` como nombre del array enviado desde el front
+  const productosArray = Array.isArray(body.productos) ? body.productos : (Array.isArray(body.lineas) ? body.lineas : null);
+  if (!Array.isArray(productosArray) || productosArray.length === 0) return 'Productos (array `productos` o `lineas`) requeridos';
+  for (const p of productosArray) {
     if (!p.producto_id || isNaN(Number(p.producto_id))) return 'ID de producto requerido';
     if (!p.cantidad || isNaN(Number(p.cantidad))) return 'Cantidad requerida';
   }
@@ -29,7 +31,9 @@ router.post('/', async (req, res) => {
   try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
   try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
   try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
-  const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
+  const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
+    // Compatibilidad: aceptar `productos` o `lineas`
+    const productos = Array.isArray(req.body.productos) ? req.body.productos : (Array.isArray(req.body.lineas) ? req.body.lineas : []);
     // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
     const clienteIdValue = (cliente_id == null || Number(cliente_id) === 0) ? null : Number(cliente_id);
     const forcedEstado = 'Pendiente';
@@ -41,7 +45,7 @@ router.post('/', async (req, res) => {
     await sql`BEGIN`;
     try {
       const produccionesCreadas = [];
-      for (const p of productos) {
+  for (const p of productos) {
         let qtyNeeded = Number(p.cantidad);
         if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
           await sql`ROLLBACK`;
@@ -115,7 +119,7 @@ router.post('/', async (req, res) => {
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
         VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}, ${tasaMontoVal}) RETURNING *
       `;
-      for (const p of productos) {
+  for (const p of productos) {
         // Obtener precio/costo/nombre actual para snapshot en pedido público
         const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
   const precioUnitario = (prodRow && prodRow[0] && prodRow[0].precio_venta != null) ? prodRow[0].precio_venta : null;

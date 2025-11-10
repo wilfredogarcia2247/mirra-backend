@@ -240,3 +240,104 @@ Si necesitás, puedo:
 - Añadir un pequeño mock JSON con ejemplos reales para usar en el frontend mientras se desarrolla.
 
 Fecha: 10-11-2025
+
+## Campos que NO enviar al crear un pedido (público)
+
+Cuando el frontend envía una petición para crear un pedido público, el backend calcula y guarda snapshots de precios y subtotales basándose en la data confiable del servidor (`productos`, `inventario`, etc.). Por seguridad e integridad, NO enviar campos que el servidor calcula internamente, por ejemplo:
+
+- `precio_unitario` (el servidor ignora los precios enviados desde el cliente)
+- `precio_venta` (el servidor genera y guarda su propio `precio_venta` como snapshot)
+- `subtotal` (el servidor recalcula subtotales por línea)
+- `precio_convertido`, `subtotal_convertido` (las conversiones se calculan en el servidor según `tasa_cambio_monto` y reglas internas)
+- `producto_nombre`/`nombre_producto` (se guarda desde la DB en el servidor como snapshot)
+
+Si el frontend envía estos campos, el servidor los ignorará o sobrescribirá con los valores calculados internamente. Si necesitás que el servidor acepte precios enviados por el cliente (p. ej. por integración con otro sistema), hay que implementarlo explícitamente en backend con validaciones adicionales (no recomendado sin controles).
+
+## Ejemplo listo para dar al frontend
+
+1) Payload mínimo recomendado (la API acepta `lineas` o `productos`):
+
+```json
+{
+  "nombre_cliente": "Leonardo Urdaneta",
+  "telefono": "04246303491",
+  "cedula": "v21230219",
+  "tasa_cambio_monto": 300,
+  "lineas": [
+    { "producto_id": 49, "cantidad": 2 }
+  ]
+}
+```
+
+2) Ejemplo fetch (POST crear pedido público)
+
+```js
+const payload = {
+  nombre_cliente: 'Leonardo Urdaneta',
+  telefono: '04246303491',
+  cedula: 'v21230219',
+  tasa_cambio_monto: 300,
+  lineas: [ { producto_id: 49, cantidad: 2 } ]
+};
+
+const res = await fetch('/api/pedidos-venta', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload)
+});
+const data = await res.json();
+if (!res.ok) {
+  // manejar error: data.error contiene mensaje legible
+  console.error('Error creando pedido público', data);
+} else {
+  // data contiene el pedido creado con snapshots: data.productos[].precio_venta en líneas
+  console.log('Pedido creado:', data);
+}
+```
+
+3) Ejemplo axios (POST crear pedido público)
+
+```js
+const payload = {
+  nombre_cliente: 'Leonardo Urdaneta',
+  telefono: '04246303491',
+  cedula: 'v21230219',
+  tasa_cambio_monto: 300,
+  productos: [ { producto_id: 49, cantidad: 2 } ]
+};
+
+try {
+  const { data } = await axios.post('/api/pedidos-venta', payload);
+  console.log('Pedido creado:', data);
+} catch (err) {
+  console.error('Error creando pedido público', err.response?.data || err.message);
+}
+```
+
+4) Ejemplo de respuesta (detalle del pedido creado)
+
+```json
+{
+  "id": 987,
+  "codigo": "PV-0123",
+  "estado": "Pendiente",
+  "tasa_cambio_monto": 300,
+  "productos": [
+    {
+      "producto_id": 49,
+      "cantidad": 2,
+      "producto_nombre": "Jabón Lavanda",
+      "precio_venta": 15.0,
+      "costo": 8.0,
+      "subtotal": 30.0
+    }
+  ],
+  "total": 30.0
+}
+```
+
+5) Nota para el front: fallback cuando `precio_venta` sea null
+
+En algún dataset legacy puede ocurrir que `precio_venta` en la línea del pedido sea `null`. En ese caso el frontend puede mostrar un mensaje de advertencia o usar el `precio_unitario` si la respuesta lo incluye por compatibilidad. Lo ideal es ejecutar el backfill/migración en el backend para que `precio_venta` exista en todas las líneas.
+
+---
