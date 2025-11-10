@@ -381,4 +381,23 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
+// POST /api/pedidos-venta/:id/cancelar -> marcar pedido Cancelado (no libera reservas automáticamente)
+router.post('/:id/cancelar', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const pedido = pedidoRows[0];
+    if (pedido.estado === 'Completado') return res.status(400).json({ error: 'No se puede cancelar un pedido ya completado' });
+
+    await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
+    return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: false, note: 'Las reservas (stock_comprometido) no se liberan automáticamente en esta versión' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Error cancelando pedido' });
+  }
+});
+
 module.exports = router;
+
