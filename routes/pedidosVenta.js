@@ -238,4 +238,78 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// Completar un pedido de venta: consumir las reservas (stock_comprometido) en almacenes 'Venta'
+// POST /api/pedidos-venta/:id/completar
+router.post('/:id/completar', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    await sql`BEGIN`;
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const pedido = pedidoRows[0];
+    if (pedido.estado === 'Completado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Pedido ya completado' });
+    }
+
+    // Obtener líneas del pedido
+    const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+    const movimientos = [];
+
+    for (const linea of lineas) {
+      let qtyNeeded = Number(linea.cantidad);
+      if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
+        await sql`ROLLBACK`;
+        return res.status(400).json({ error: 'Cantidad inválida en líneas del pedido' });
+      }
+      // Obtener inventarios de tipo Venta donde hay stock_comprometido (reservas), bloquear filas
+      const invs = await sql`
+        SELECT i.* FROM inventario i
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE i.producto_id = ${linea.producto_id} AND a.tipo = 'Venta' AND i.stock_comprometido > 0
+        ORDER BY i.stock_comprometido DESC
+        FOR UPDATE
+      `;
+      for (const inv of invs) {
+        if (qtyNeeded <= 0) break;
+        const committed = Number(inv.stock_comprometido);
+        if (committed <= 0) continue;
+        const take = Math.min(committed, qtyNeeded);
+        // Consumir de forma segura: asegurar que stock_fisico no quede negativo y stock_comprometido suficiente
+        const consumed = await sql`
+          UPDATE inventario
+          SET stock_fisico = stock_fisico - ${take}, stock_comprometido = stock_comprometido - ${take}
+          WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0 AND stock_comprometido >= ${take}
+          RETURNING id, stock_fisico, stock_comprometido, almacen_id
+        `;
+        if (!consumed || consumed.length === 0) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: `No se pudo consumir inventario reservado para producto ${linea.producto_id}` });
+        }
+        // Registrar movimiento
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+        movimientos.push({ producto_id: linea.producto_id, almacen_id: inv.almacen_id, cantidad: take });
+        qtyNeeded -= take;
+      }
+      if (qtyNeeded > 0) {
+        // Esto indica inconsistencia: se habían reservado menos de lo esperado o consumido por otro proceso
+        await sql`ROLLBACK`;
+        return res.status(400).json({ error: `Stock comprometido insuficiente para producto ${linea.producto_id}` });
+      }
+    }
+
+    // Marcar pedido como Completado
+    await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
+    await sql`COMMIT`;
+    return res.json({ success: true, pedido_id: pedidoId, movimientos });
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) {}
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
