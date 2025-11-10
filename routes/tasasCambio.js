@@ -34,11 +34,29 @@ router.post('/', async (req, res) => {
   if (monto == null || isNaN(Number(monto)) || Number(monto) <= 0) return res.status(400).json({ error: 'Monto inválido' });
   if (!simbolo || typeof simbolo !== 'string' || simbolo.trim() === '') return res.status(400).json({ error: 'Símbolo requerido' });
   try {
-    const created = await sql`
-      INSERT INTO tasas_cambio (monto, simbolo, descripcion, creado_en)
-      VALUES (${Number(monto)}, ${simbolo.trim()}, ${descripcion || null}, NOW()) RETURNING *
-    `;
-    return res.status(201).json(created[0]);
+    const activo = req.body.activo === true;
+    if (activo) {
+      // Si se crea una tasa activa, desactivar otras en transacción
+      await sql`BEGIN`;
+      try {
+        await sql`UPDATE tasas_cambio SET activo = FALSE WHERE activo = TRUE`;
+        const created = await sql`
+          INSERT INTO tasas_cambio (monto, simbolo, descripcion, creado_en, activo)
+          VALUES (${Number(monto)}, ${simbolo.trim()}, ${descripcion || null}, NOW(), TRUE) RETURNING *
+        `;
+        await sql`COMMIT`;
+        return res.status(201).json(created[0]);
+      } catch (e) {
+        try { await sql`ROLLBACK`; } catch (er) {}
+        throw e;
+      }
+    } else {
+      const created = await sql`
+        INSERT INTO tasas_cambio (monto, simbolo, descripcion, creado_en, activo)
+        VALUES (${Number(monto)}, ${simbolo.trim()}, ${descripcion || null}, NOW(), FALSE) RETURNING *
+      `;
+      return res.status(201).json(created[0]);
+    }
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error creando tasa' });
@@ -53,14 +71,49 @@ router.put('/:id', async (req, res) => {
   if (monto != null && (isNaN(Number(monto)) || Number(monto) <= 0)) return res.status(400).json({ error: 'Monto inválido' });
   if (simbolo != null && (typeof simbolo !== 'string' || simbolo.trim() === '')) return res.status(400).json({ error: 'Símbolo inválido' });
   try {
-    const updated = await sql`
-      UPDATE tasas_cambio
-      SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW()
-      WHERE id = ${id}
-      RETURNING *
-    `;
-    if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    return res.json(updated[0]);
+    const activo = req.body.activo;
+    // Si se solicita activar esta tasa, desactivar otras en transacción
+    if (activo === true) {
+      await sql`BEGIN`;
+      try {
+        await sql`UPDATE tasas_cambio SET activo = FALSE WHERE activo = TRUE`;
+        const updated = await sql`
+          UPDATE tasas_cambio
+          SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW(), activo = TRUE
+          WHERE id = ${id}
+          RETURNING *
+        `;
+        if (!updated || updated.length === 0) {
+          await sql`ROLLBACK`;
+          return res.status(404).json({ error: 'No encontrado' });
+        }
+        await sql`COMMIT`;
+        return res.json(updated[0]);
+      } catch (e) {
+        try { await sql`ROLLBACK`; } catch (er) {}
+        throw e;
+      }
+    } else if (activo === false) {
+      // Simple update que asegura activo = false
+      const updated = await sql`
+        UPDATE tasas_cambio
+        SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW(), activo = FALSE
+        WHERE id = ${id}
+        RETURNING *
+      `;
+      if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
+      return res.json(updated[0]);
+    } else {
+      // activo no proporcionado: actualización estándar
+      const updated = await sql`
+        UPDATE tasas_cambio
+        SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW()
+        WHERE id = ${id}
+        RETURNING *
+      `;
+      if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
+      return res.json(updated[0]);
+    }
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Error actualizando tasa' });

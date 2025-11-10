@@ -121,6 +121,9 @@ async function initDB() {
       creado_en TIMESTAMP DEFAULT NOW(),
       actualizado_en TIMESTAMP
     );`;
+    // Asegurar columna activo y un índice parcial único para que sólo una tasa pueda estar activa
+    try { await sql`ALTER TABLE tasas_cambio ADD COLUMN activo BOOLEAN DEFAULT FALSE;`; } catch(e) {}
+    try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasas_cambio_activo_true ON tasas_cambio (activo) WHERE activo = TRUE;`; } catch(e) {}
     // Tabla de movimientos de inventario para auditoría
     await sql`CREATE TABLE IF NOT EXISTS inventario_movimientos (
       id SERIAL PRIMARY KEY,
