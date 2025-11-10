@@ -72,6 +72,9 @@ app.use('/api/pedidos-venta', require('./routes/pedidosVentaPublic'));
 // Catálogo público de productos (no requiere token)
 app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
 
+// Endpoint público para obtener la tasa de cambio activa
+app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
+
 // Rutas protegidas
 app.use('/api/productos', authMiddleware, require('./routes/productos'));
 app.use('/api/proveedores', authMiddleware, require('./routes/proveedores'));
