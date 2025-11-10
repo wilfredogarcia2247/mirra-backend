@@ -40,7 +40,29 @@ router.get('/', async (req, res) => {
       }
     }
 
-    res.json(result);
+    // Enriquecer cada producto con inventario por almacén (opcional para front)
+    const enriched = [];
+    for (const prod of result) {
+      const inv = await sql`
+        SELECT i.id, i.producto_id, i.almacen_id, i.stock_fisico, i.stock_comprometido,
+               (i.stock_fisico - i.stock_comprometido) AS stock_disponible,
+               a.nombre AS almacen_nombre, a.tipo AS almacen_tipo
+        FROM inventario i
+        LEFT JOIN almacenes a ON a.id = i.almacen_id
+        WHERE i.producto_id = ${prod.id}
+      `;
+      const inventarioMapeado = (inv || []).map(i => ({
+        id: i.id,
+        almacen_id: i.almacen_id,
+        almacen_nombre: i.almacen_nombre,
+        almacen_tipo: i.almacen_tipo,
+        stock_fisico: Number(i.stock_fisico),
+        stock_comprometido: Number(i.stock_comprometido),
+        stock_disponible: Number(i.stock_disponible)
+      }));
+      enriched.push({ ...prod, inventario: inventarioMapeado });
+    }
+    res.json(enriched);
   } catch (err) {
     console.error('Error en /api/productos/catalogo', err);
     res.status(500).json({ error: err.message });

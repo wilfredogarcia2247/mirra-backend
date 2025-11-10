@@ -17,7 +17,29 @@ function validarProducto(body) {
 router.get('/', async (req, res) => {
   try {
     const result = await sql`SELECT * FROM productos`;
-    res.json(result);
+    const productosConInventario = [];
+    for (const prod of result) {
+      const inv = await sql`
+        SELECT i.id, i.producto_id, i.almacen_id, i.stock_fisico, i.stock_comprometido,
+               (i.stock_fisico - i.stock_comprometido) AS stock_disponible,
+               a.nombre AS almacen_nombre, a.tipo AS almacen_tipo, a.ubicacion AS almacen_ubicacion
+        FROM inventario i
+        LEFT JOIN almacenes a ON a.id = i.almacen_id
+        WHERE i.producto_id = ${prod.id}
+      `;
+      const inventarioMapeado = (inv || []).map(i => ({
+        id: i.id,
+        almacen_id: i.almacen_id,
+        almacen_nombre: i.almacen_nombre,
+        almacen_tipo: i.almacen_tipo,
+        almacen_ubicacion: i.almacen_ubicacion,
+        stock_fisico: Number(i.stock_fisico),
+        stock_comprometido: Number(i.stock_comprometido),
+        stock_disponible: Number(i.stock_disponible)
+      }));
+      productosConInventario.push({ ...prod, inventario: inventarioMapeado });
+    }
+    res.json(productosConInventario);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -47,7 +69,26 @@ router.get('/:id', async (req, res) => {
   try {
     const result = await sql`SELECT * FROM productos WHERE id = ${req.params.id}`;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    res.json(result[0]);
+    const prod = result[0];
+    const inv = await sql`
+      SELECT i.id, i.producto_id, i.almacen_id, i.stock_fisico, i.stock_comprometido,
+             (i.stock_fisico - i.stock_comprometido) AS stock_disponible,
+             a.nombre AS almacen_nombre, a.tipo AS almacen_tipo, a.ubicacion AS almacen_ubicacion
+      FROM inventario i
+      LEFT JOIN almacenes a ON a.id = i.almacen_id
+      WHERE i.producto_id = ${prod.id}
+    `;
+    const inventarioMapeado = (inv || []).map(i => ({
+      id: i.id,
+      almacen_id: i.almacen_id,
+      almacen_nombre: i.almacen_nombre,
+      almacen_tipo: i.almacen_tipo,
+      almacen_ubicacion: i.almacen_ubicacion,
+      stock_fisico: Number(i.stock_fisico),
+      stock_comprometido: Number(i.stock_comprometido),
+      stock_disponible: Number(i.stock_disponible)
+    }));
+    res.json({ ...prod, inventario: inventarioMapeado });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
