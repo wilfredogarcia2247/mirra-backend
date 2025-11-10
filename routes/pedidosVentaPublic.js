@@ -14,6 +14,8 @@ function validarPedido(body) {
   }
   // estado es opcional para pedidos públicos (se fuerza a 'Pendiente' en la inserción)
   if (body.estado != null && !['Pendiente', 'Enviado', 'Completado'].includes(body.estado)) return 'Estado inválido';
+  // Si se provee tasa_cambio_monto debe ser un número positivo
+  if (body.tasa_cambio_monto != null && (isNaN(Number(body.tasa_cambio_monto)) || Number(body.tasa_cambio_monto) <= 0)) return 'tasa_cambio_monto inválida';
   return null;
 }
 
