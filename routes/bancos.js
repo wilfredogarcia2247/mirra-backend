@@ -37,8 +37,23 @@ function validarBanco(body) {
 
 router.get('/', async (req, res) => {
   try {
-    const result = await sql`SELECT * FROM bancos`;
-    res.json(result);
+    // Intentar devolver bancos con sus formas de pago embebidas (id, nombre, detalles)
+    // Usamos una agregación JSON; si la tabla de asociación no existe, hacemos fallback a SELECT simple
+    try {
+      const rows = await sql`
+        SELECT b.*, COALESCE(json_agg(json_build_object('id', f.id, 'nombre', f.nombre, 'detalles', bf.detalles)) FILTER (WHERE f.id IS NOT NULL), '[]') AS formas_pago
+        FROM bancos b
+        LEFT JOIN banco_formas_pago bf ON bf.banco_id = b.id
+        LEFT JOIN formas_pago f ON f.id = bf.forma_pago_id
+        GROUP BY b.id
+        ORDER BY b.id
+      `;
+      return res.json(rows || []);
+    } catch (e) {
+      // Fallback conservador: retornar bancos sin formas si la agregación falla (p. ej. tabla no creada)
+      const result = await sql`SELECT * FROM bancos`;
+      return res.json(result || []);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
