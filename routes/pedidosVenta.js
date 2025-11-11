@@ -17,6 +17,20 @@ function validarPedido(body) {
   return null;
 }
 
+function validarPagoObj(pago) {
+  if (!pago) return null; // es opcional
+  if (typeof pago !== 'object') return 'Pago inválido';
+  if (pago.forma_pago_id == null || isNaN(Number(pago.forma_pago_id))) return 'forma_pago_id requerido en pago';
+  if (pago.monto == null || isNaN(Number(pago.monto)) || Number(pago.monto) <= 0) return 'monto inválido en pago';
+  if (pago.banco_id != null && isNaN(Number(pago.banco_id))) return 'banco_id inválido en pago';
+  // referencia y fecha_transaccion son opcionales; si fecha_transaccion existe debe ser parseable
+  if (pago.fecha_transaccion) {
+    const d = new Date(pago.fecha_transaccion);
+    if (isNaN(d.getTime())) return 'fecha_transaccion inválida';
+  }
+  return null;
+}
+
 router.get('/', async (req, res) => {
   try {
   // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
@@ -261,6 +275,9 @@ router.get('/:id', async (req, res) => {
 
 // Helper transaccional para completar un pedido: consume reservas y marca Completado
 async function completarPedidoTransaccional(pedidoId) {
+  // completarPedidoTransaccional ahora puede recibir un objeto pago opcional al llamarlo;
+  // si no se facilita, se llamará sin pago. Para compatibilidad, revisamos arguments
+  const pagoObj = arguments && arguments[1] ? arguments[1] : null;
   await sql`BEGIN`;
   const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
   if (!pedidoRows || pedidoRows.length === 0) {
@@ -315,22 +332,76 @@ async function completarPedidoTransaccional(pedidoId) {
   }
 
   await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
+  // Insertar pago si viene información
+  let pagoInserted = null;
+  if (pagoObj) {
+    try {
+      // Asegurar tabla pagos existe (defensivo)
+      try {
+        await sql`CREATE TABLE IF NOT EXISTS pagos (
+          id SERIAL PRIMARY KEY,
+          pedido_venta_id INT,
+          forma_pago_id INT,
+          banco_id INT,
+          monto NUMERIC,
+          fecha TIMESTAMP
+        );`;
+      } catch (e) {}
+      // Insertar registro de pago
+      const inserted = await sql`
+        INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha)
+        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto}, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW()) RETURNING *
+      `;
+      pagoInserted = inserted && inserted[0] ? inserted[0] : null;
+    } catch (e) {
+      // Si falla la inserción de pago, rollback para mantener atomicidad
+      await sql`ROLLBACK`;
+      const err = new Error('Error registrando pago: ' + e.message);
+      err.code = 'PAYMENT_INSERT_ERROR';
+      throw err;
+    }
+  }
   await sql`COMMIT`;
-  return { success: true, pedido_id: pedidoId, movimientos };
+  return { success: true, pedido_id: pedidoId, movimientos, pago: pagoInserted };
 }
 
 // POST /api/pedidos-venta/:id/completar (usa helper transaccional)
 router.post('/:id/completar', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  const pago = req.body && req.body.pago ? req.body.pago : null;
+  const pagoError = validarPagoObj(pago);
+  if (pagoError) return res.status(400).json({ error: pagoError });
   try {
-    const result = await completarPedidoTransaccional(pedidoId);
+    const result = await completarPedidoTransaccional(pedidoId, pago);
     return res.json(result);
   } catch (err) {
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
     if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+    if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/pedidos-venta/:id/finalizar -> endpoint explícito para completar y registrar pago
+router.post('/:id/finalizar', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  const pago = req.body && req.body.pago ? req.body.pago : null;
+  const pagoError = validarPagoObj(pago);
+  if (pagoError) return res.status(400).json({ error: pagoError });
+  try {
+    const result = await completarPedidoTransaccional(pedidoId, pago);
+    return res.json(result);
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
+    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
+    if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+    if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
     console.error(err);
     return res.status(500).json({ error: err.message });
   }
@@ -377,7 +448,10 @@ router.put('/:id/status', async (req, res) => {
     // Si se solicita Completado, reutilizar la función transaccional
     if (estado === 'Completado') {
       try {
-        const result = await completarPedidoTransaccional(pedidoId);
+        const pago = req.body && req.body.pago ? req.body.pago : null;
+        const pagoError = validarPagoObj(pago);
+        if (pagoError) return res.status(400).json({ error: pagoError });
+        const result = await completarPedidoTransaccional(pedidoId, pago);
         return res.json(result);
       } catch (err) {
         if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });

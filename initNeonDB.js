@@ -44,6 +44,9 @@ async function initDB() {
       monto NUMERIC,
       fecha TIMESTAMP
     );`;
+    // Asegurar columnas adicionales para registros de pago
+    try { await sql`ALTER TABLE pagos ADD COLUMN referencia TEXT;`; } catch(e) {}
+    try { await sql`ALTER TABLE pagos ADD COLUMN fecha_transaccion TIMESTAMP;`; } catch(e) {}
     await sql`INSERT INTO bancos (nombre) VALUES
       ('Banco Uno'),
       ('Banco Dos')
