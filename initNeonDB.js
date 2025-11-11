@@ -238,6 +238,65 @@ async function initDB() {
       ('Efectivo')
       ON CONFLICT DO NOTHING;`;
 
+    // Asegurar existencia de la forma 'Pago Movil' y crear tabla de relación banco -> formas_pago
+    try {
+      await sql`INSERT INTO formas_pago (nombre) SELECT 'Pago Movil' WHERE NOT EXISTS (SELECT 1 FROM formas_pago WHERE nombre = 'Pago Movil')`;
+    } catch(e) {}
+
+    // Tabla que asocia bancos con formas de pago y guarda detalles (json) por banco
+    await sql`CREATE TABLE IF NOT EXISTS banco_formas_pago (
+      id SERIAL PRIMARY KEY,
+      banco_id INT REFERENCES bancos(id) ON DELETE CASCADE,
+      forma_pago_id INT REFERENCES formas_pago(id) ON DELETE RESTRICT,
+      detalles JSONB,
+      creado_en TIMESTAMP DEFAULT NOW()
+    );`;
+
+    // Semillas: asociar ejemplos de formas de pago a los bancos existentes
+    try {
+      // Insertar asociación sólo si no existe
+      await sql`
+        INSERT INTO banco_formas_pago (banco_id, forma_pago_id, detalles)
+        SELECT b.id, f.id, jsonb_build_object('tipo','cuenta','valor','1234567890','observaciones','Cuenta principal')
+        FROM bancos b, formas_pago f
+        WHERE b.nombre = 'Banco Uno' AND f.nombre = 'Transferencia'
+        AND NOT EXISTS (SELECT 1 FROM banco_formas_pago bf WHERE bf.banco_id = b.id AND bf.forma_pago_id = f.id);
+      `;
+      await sql`
+        INSERT INTO banco_formas_pago (banco_id, forma_pago_id, detalles)
+        SELECT b.id, f.id, jsonb_build_object('tipo','pago_movil','operador','MOV','numero','04141234567','observaciones','Pago móvil del comercio')
+        FROM bancos b, formas_pago f
+        WHERE b.nombre = 'Banco Uno' AND f.nombre = 'Pago Movil'
+        AND NOT EXISTS (SELECT 1 FROM banco_formas_pago bf WHERE bf.banco_id = b.id AND bf.forma_pago_id = f.id);
+      `;
+      await sql`
+        INSERT INTO banco_formas_pago (banco_id, forma_pago_id, detalles)
+        SELECT b.id, f.id, jsonb_build_object('tipo','cuenta','valor','0987654321','observaciones','Cuenta de pagos')
+        FROM bancos b, formas_pago f
+        WHERE b.nombre = 'Banco Dos' AND f.nombre = 'Transferencia'
+        AND NOT EXISTS (SELECT 1 FROM banco_formas_pago bf WHERE bf.banco_id = b.id AND bf.forma_pago_id = f.id);
+      `;
+      // Semilla: Banco de Venezuela con Transferencia y Pago Movil
+      await sql`
+        INSERT INTO bancos (nombre)
+        SELECT 'Banco de Venezuela' WHERE NOT EXISTS (SELECT 1 FROM bancos WHERE nombre = 'Banco de Venezuela');
+      `;
+      await sql`
+        INSERT INTO banco_formas_pago (banco_id, forma_pago_id, detalles)
+        SELECT b.id, f.id, jsonb_build_object('tipo','cuenta','valor','00012345678','observaciones','Cuenta principal Banco de Venezuela')
+        FROM bancos b, formas_pago f
+        WHERE b.nombre = 'Banco de Venezuela' AND f.nombre = 'Transferencia'
+        AND NOT EXISTS (SELECT 1 FROM banco_formas_pago bf WHERE bf.banco_id = b.id AND bf.forma_pago_id = f.id);
+      `;
+      await sql`
+        INSERT INTO banco_formas_pago (banco_id, forma_pago_id, detalles)
+        SELECT b.id, f.id, jsonb_build_object('tipo','pago_movil','operador','MOV','numero','04241234567','observaciones','Pago móvil Banco de Venezuela')
+        FROM bancos b, formas_pago f
+        WHERE b.nombre = 'Banco de Venezuela' AND f.nombre = 'Pago Movil'
+        AND NOT EXISTS (SELECT 1 FROM banco_formas_pago bf WHERE bf.banco_id = b.id AND bf.forma_pago_id = f.id);
+      `;
+    } catch (e) {}
+
     await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES
       (1, 1, 1000, 0),
       (2, 1, 5000, 0),

@@ -103,4 +103,42 @@ Notas de implementación
 - El backend valida `nombre` como string no vacío.
 - El backend impide eliminar bancos que tengan entradas en `cliente_bancos`.
 
+Formas de pago y campo `detalles`
+
+- Cada banco puede tener varias entradas en `banco_formas_pago`. Cada entrada contiene `detalles` (JSON) con la información necesaria para usar esa forma de pago.
+- Convenciones recomendadas para `detalles` (no son obligatorias en DB, pero sirven como contrato entre frontend/backend):
+  - Pago Movil:
+    - `numero_telefono` (string): número de teléfono del receptor (ej. "04241234567").
+    - `documento` (string): cédula o RIF del receptor (ej. "V-12345678", "J-12345678-9").
+    - `operador` (opcional): operador del pago móvil (ej. "MOV").
+    - `observaciones` (opcional).
+  - Transferencia:
+    - `numero_cuenta` (string): número de cuenta o CLABE/IBAN según país (ej. "00012345678").
+    - `documento` (string): cédula o RIF del titular.
+    - `tipo_cuenta` (opcional): ej. "corriente" o "ahorro".
+    - `observaciones` (opcional).
+
+Ejemplo: Banco de Venezuela (semilla)
+
+POST /api/bancos (body)
+
+{
+  "nombre": "Banco de Venezuela",
+  "formas_pago": [
+    { "forma_pago_id": 2, "detalles": { "numero_cuenta": "00012345678", "documento": "V-12345678" } },
+    { "forma_pago_id": 4, "detalles": { "numero_telefono": "04241234567", "documento": "V-12345678", "operador": "MOV" } }
+  ]
+}
+
+GET /api/bancos/:id (respuesta esperada)
+
+{
+  "id": 10,
+  "nombre": "Banco de Venezuela",
+  "formas_pago": [
+    { "id": 2, "nombre": "Transferencia", "detalles": { "numero_cuenta": "00012345678", "documento": "V-12345678" } },
+    { "id": 4, "nombre": "Pago Movil", "detalles": { "numero_telefono": "04241234567", "documento": "V-12345678", "operador": "MOV" } }
+  ]
+}
+
 Fecha: 11-11-2025
