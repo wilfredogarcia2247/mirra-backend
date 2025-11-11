@@ -32,6 +32,7 @@ function validateDetallesByNombre(nombre, detalles) {
 function validarBanco(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
   if (body.formas_pago && !Array.isArray(body.formas_pago)) return 'formas_pago debe ser un arreglo si se envía';
+  if (body.moneda && typeof body.moneda !== 'string') return 'moneda inválida';
   return null;
 }
 
@@ -63,7 +64,7 @@ router.post('/', async (req, res) => {
   const error = validarBanco(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, formas_pago } = req.body;
+  const { nombre, formas_pago, moneda } = req.body;
     // Validar formas_pago si vienen
     if (formas_pago && Array.isArray(formas_pago)) {
       for (const fp of formas_pago) {
@@ -75,8 +76,19 @@ router.post('/', async (req, res) => {
       }
     }
     // Crear banco
-    const result = await sql`INSERT INTO bancos (nombre) VALUES (${nombre}) RETURNING *`;
-    const banco = result[0];
+    let banco;
+    try {
+      const result = await sql`INSERT INTO bancos (nombre, moneda) VALUES (${nombre}, ${moneda || null}) RETURNING *`;
+      banco = result[0];
+    } catch (e) {
+      // Fallback para entornos donde la columna moneda no existe
+      try {
+        const res2 = await sql`INSERT INTO bancos (nombre) VALUES (${nombre}) RETURNING *`;
+        banco = res2[0];
+      } catch (e2) {
+        throw e; // rethrow original
+      }
+    }
     // Insertar asociaciones validadas
     if (formas_pago && Array.isArray(formas_pago)) {
       // Verificar si la tabla existe en esta BD (por entornos donde initNeonDB no se ejecutó)
@@ -134,7 +146,7 @@ router.put('/:id', async (req, res) => {
   const error = validarBanco(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre } = req.body;
+    const { nombre, moneda } = req.body;
     const updated = await sql`UPDATE bancos SET nombre = ${nombre} WHERE id = ${id} RETURNING *`;
     if (!updated || updated.length === 0) return res.status(404).json({ error: 'Banco no encontrado' });
     const banco = updated[0];
@@ -169,7 +181,15 @@ router.put('/:id', async (req, res) => {
     } catch (e) {
       banco.formas_pago = [];
     }
-    res.json(banco);
+    // Actualizar el campo moneda si fue enviado
+    try {
+      await sql`UPDATE bancos SET moneda = ${moneda || null} WHERE id = ${id}`;
+      const refreshed = await sql`SELECT * FROM bancos WHERE id = ${id}`;
+      return res.json(refreshed && refreshed[0] ? refreshed[0] : banco);
+    } catch (e) {
+      // Si la actualización falla, devolver el banco original con formas
+      return res.json(banco);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

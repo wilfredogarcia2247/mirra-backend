@@ -344,13 +344,47 @@ async function completarPedidoTransaccional(pedidoId) {
           forma_pago_id INT,
           banco_id INT,
           monto NUMERIC,
-          fecha TIMESTAMP
+          referencia TEXT,
+          fecha_transaccion TIMESTAMP,
+          fecha TIMESTAMP,
+          tasa NUMERIC,
+          tasa_simbolo VARCHAR(10)
         );`;
       } catch (e) {}
-      // Insertar registro de pago
+
+      // Determinar tasa a aplicar según la moneda del banco (si se provee banco_id)
+      let tasaVal = null;
+      let tasaSimbolo = null;
+      try {
+        if (pagoObj.banco_id != null) {
+          const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pagoObj.banco_id}`;
+          const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+          if (moneda) {
+            const tasaRow = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
+            if (tasaRow && tasaRow[0]) {
+              tasaVal = tasaRow[0].monto;
+              tasaSimbolo = tasaRow[0].simbolo;
+            }
+          }
+        }
+      } catch (e) {
+        // ignore, fallback below
+      }
+      // Fallback: si no encontramos una tasa específica, usar la tasa activa cualquiera
+      if (tasaVal == null) {
+        try {
+          const anyT = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
+          if (anyT && anyT[0]) {
+            tasaVal = anyT[0].monto;
+            tasaSimbolo = anyT[0].simbolo;
+          }
+        } catch (e) {}
+      }
+
+      // Insertar registro de pago incluyendo tasa y símbolo
       const inserted = await sql`
-        INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha)
-        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto}, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW()) RETURNING *
+        INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
+        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto}, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *
       `;
       pagoInserted = inserted && inserted[0] ? inserted[0] : null;
     } catch (e) {

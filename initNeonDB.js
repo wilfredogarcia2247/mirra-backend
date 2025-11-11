@@ -30,6 +30,8 @@ async function initDB() {
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100)
     );`;
+  // Asegurar columna para moneda en bancos
+  try { await sql`ALTER TABLE bancos ADD COLUMN moneda VARCHAR(10);`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS cliente_bancos (
       id SERIAL PRIMARY KEY,
       cliente_id INT,
@@ -47,6 +49,9 @@ async function initDB() {
     // Asegurar columnas adicionales para registros de pago
     try { await sql`ALTER TABLE pagos ADD COLUMN referencia TEXT;`; } catch(e) {}
     try { await sql`ALTER TABLE pagos ADD COLUMN fecha_transaccion TIMESTAMP;`; } catch(e) {}
+    // Asegurar columnas para tasa y símbolo en pagos
+    try { await sql`ALTER TABLE pagos ADD COLUMN tasa NUMERIC;`; } catch(e) {}
+    try { await sql`ALTER TABLE pagos ADD COLUMN tasa_simbolo VARCHAR(10);`; } catch(e) {}
     await sql`INSERT INTO bancos (nombre) VALUES
       ('Banco Uno'),
       ('Banco Dos')
