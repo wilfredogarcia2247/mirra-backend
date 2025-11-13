@@ -65,17 +65,7 @@ router.post('/', async (req, res) => {
           }
         } catch (e) {}
       }
-      // Si no se obtuvo desde la moneda del banco, intentar detalles por combinación banco+forma
-      if (tasaVal == null && banco_id != null && forma_pago_id != null) {
-        try {
-          const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${banco_id} AND forma_pago_id = ${forma_pago_id} LIMIT 1`;
-          if (bf && bf[0] && bf[0].detalles) {
-            const det = bf[0].detalles;
-            if (det.tasa != null) tasaVal = det.tasa;
-            if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo; else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
-          }
-        } catch (e) {}
-      }
+      
     } catch (e) {}
 
     const result = await sql`INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, fecha, tasa, tasa_simbolo) VALUES (${pedido_venta_id}, ${forma_pago_id}, ${banco_id}, ${monto}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *`;
