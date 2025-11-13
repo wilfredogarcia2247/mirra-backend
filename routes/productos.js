@@ -7,6 +7,8 @@ const sql = neon(process.env.DATABASE_URL);
 function validarProducto(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
   if (!body.tipo || !['interno', 'ProductoTerminado'].includes(body.tipo)) return 'Tipo inválido';
+  if (body.categoria_id != null && isNaN(Number(body.categoria_id))) return 'categoria_id inválido';
+  if (body.marca_id != null && isNaN(Number(body.marca_id))) return 'marca_id inválido';
   if (!body.unidad || typeof body.unidad !== 'string') return 'Unidad requerida';
   if (body.stock != null && isNaN(Number(body.stock))) return 'Stock debe ser numérico';
   if (body.image_url != null && typeof body.image_url !== 'string') return 'image_url debe ser string';
@@ -20,7 +22,9 @@ router.get('/', async (req, res) => {
     const rows = await sql`
       SELECT p.*, 
         COALESCE(inv_tot.stock_disponible_total, 0) AS stock,
-        COALESCE(inv_arr.inventario, '[]'::json) AS inventario
+        COALESCE(inv_arr.inventario, '[]'::json) AS inventario,
+        (SELECT nombre FROM categorias c WHERE c.id = p.categoria_id) AS categoria_nombre,
+        (SELECT nombre FROM marcas m WHERE m.id = p.marca_id) AS marca_nombre
       FROM productos p
       LEFT JOIN (
         SELECT producto_id, json_agg(json_build_object(
@@ -55,10 +59,11 @@ router.get('/', async (req, res) => {
         stock_comprometido: Number(i.stock_comprometido),
         stock_disponible: Number(i.stock_disponible)
       })) : [];
-      return { ...p, stock: Number(p.stock), inventario };
+      return { ...p, stock: Number(p.stock), inventario, categoria_nombre: p.categoria_nombre || null, marca_nombre: p.marca_nombre || null };
     });
     res.json(productos);
   } catch (err) {
+    console.error('Error en GET /api/productos:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -67,17 +72,18 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
   const payloadPost = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-  const error = validarProducto(payloadPost);
+    const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = payloadPost;
+    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPost;
     const result = await sql`
-      INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url)
-      VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null})
+      INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id)
+      VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
       RETURNING *
     `;
     res.status(201).json(result[0]);
   } catch (err) {
+    console.error('Error creando producto:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -126,6 +132,7 @@ router.get('/:id', async (req, res) => {
     })) : [];
     res.json({ ...p, stock: Number(p.stock), inventario });
   } catch (err) {
+    console.error('Error GET /api/productos/:id:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -137,16 +144,17 @@ router.put('/:id', async (req, res) => {
   try {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url } = payloadPut;
+    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPut;
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=COALESCE(${image_url}, image_url)
+      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
     res.json(result[0]);
   } catch (err) {
+    console.error('Error actualizando producto:', err);
     res.status(500).json({ error: err.message });
   }
 });

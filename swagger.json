@@ -118,6 +118,8 @@
         "properties": {
           "nombre": { "type": "string" },
           "tipo": { "type": "string", "enum": ["interno", "ProductoTerminado"] },
+          "categoria_id": { "type": "integer" },
+          "marca_id": { "type": "integer" },
           "unidad": { "type": "string" },
           "stock": { "type": "integer" },
           "costo": { "type": "number" },

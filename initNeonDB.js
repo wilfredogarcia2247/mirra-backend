@@ -78,6 +78,24 @@ async function initDB() {
       precio_venta NUMERIC,
       proveedor_id INT
     );`;
+    // Crear tablas de categorías y marcas y relacionarlas con productos
+    await sql`CREATE TABLE IF NOT EXISTS categorias (
+      id SERIAL PRIMARY KEY,
+      nombre VARCHAR(100) UNIQUE,
+      descripcion TEXT,
+      creado_en TIMESTAMP DEFAULT NOW()
+    );`;
+    await sql`CREATE TABLE IF NOT EXISTS marcas (
+      id SERIAL PRIMARY KEY,
+      nombre VARCHAR(100) UNIQUE,
+      descripcion TEXT,
+      creado_en TIMESTAMP DEFAULT NOW()
+    );`;
+    // Asegurar columnas de relación en productos (categoria_id, marca_id)
+    try { await sql`ALTER TABLE productos ADD COLUMN categoria_id INT`; } catch(e) {}
+    try { await sql`ALTER TABLE productos ADD COLUMN marca_id INT`; } catch(e) {}
+    try { await sql`ALTER TABLE productos ADD CONSTRAINT fk_productos_categoria FOREIGN KEY (categoria_id) REFERENCES categorias(id) ON DELETE SET NULL`; } catch(e) {}
+    try { await sql`ALTER TABLE productos ADD CONSTRAINT fk_productos_marca FOREIGN KEY (marca_id) REFERENCES marcas(id) ON DELETE SET NULL`; } catch(e) {}
     // Asegurar la columna image_url en productos (migración segura)
     try { await sql`ALTER TABLE productos ADD COLUMN image_url TEXT;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS almacenes (
