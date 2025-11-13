@@ -100,8 +100,8 @@ router.post('/', async (req, res) => {
         // Intentar reservar desde almacenes de tipo 'Venta'
         const inventariosVenta = await sql`
           SELECT i.* FROM inventario i
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE i.producto_id = ${p.producto_id} AND a.tipo = 'Venta'
+            JOIN almacenes a ON a.id = i.almacen_id
+            WHERE i.producto_id = ${p.producto_id} AND a.tipo IN ('Venta','Interno')
           ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         `;
         for (const inv of inventariosVenta) {
@@ -299,10 +299,10 @@ async function completarPedidoTransaccional(pedidoId) {
       await sql`ROLLBACK`;
       const e = new Error('Cantidad inválida en líneas del pedido'); e.code = 'INVALID_QTY'; throw e;
     }
-    const invs = await sql`
+      const invs = await sql`
       SELECT i.* FROM inventario i
       JOIN almacenes a ON a.id = i.almacen_id
-      WHERE i.producto_id = ${linea.producto_id} AND a.tipo = 'Venta' AND i.stock_comprometido > 0
+      WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('Venta','Interno') AND i.stock_comprometido > 0
       ORDER BY i.stock_comprometido DESC
       FOR UPDATE
     `;
