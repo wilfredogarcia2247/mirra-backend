@@ -155,7 +155,7 @@ router.post('/', async (req, res) => {
             const mpInventarios = await sql`
               SELECT i.* FROM inventario i
               JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'MateriaPrima'
+              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
               ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
             `;
             for (const inv of mpInventarios) {

@@ -78,15 +78,15 @@ router.post('/:id/completar', async (req, res) => {
     const movimientos = [];
 
     // Verificar disponibilidad y consumir materia prima
-    for (const comp of componentes) {
+      for (const comp of componentes) {
       let required = Number(comp.cantidad) * qty;
-      const mpInventarios = await sql`
-        SELECT i.* FROM inventario i
-        JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'MateriaPrima'
-        ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-        FOR UPDATE
-      `;
+        const mpInventarios = await sql`
+          SELECT i.* FROM inventario i
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+          ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+          FOR UPDATE
+        `;
       let totalAvailable = 0;
       for (const inv of mpInventarios) totalAvailable += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
       if (totalAvailable < required) {

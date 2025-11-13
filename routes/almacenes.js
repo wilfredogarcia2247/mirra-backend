@@ -61,7 +61,7 @@ router.put('/:id', async (req, res) => {
         const movCount = movimientos && movimientos[0] ? Number(movimientos[0].c) : 0;
         if (movCount > 0) return res.status(400).json({ error: 'No se puede cambiar el tipo de almacén: existen movimientos registrados' });
       }
-      const finalTipo = es_materia_prima === true ? 'MateriaPrima' : (es_materia_prima === false ? 'Venta' : tipo);
+      const finalTipo = es_materia_prima === true ? 'Interno' : (es_materia_prima === false ? 'Venta' : tipo);
       const result = await sql`
         UPDATE almacenes SET nombre=${nombre}, tipo=${finalTipo}, ubicacion=${ubicacion}, responsable=${responsable}, es_materia_prima=${es_materia_prima != null ? es_materia_prima : sql`es_materia_prima`} 
         WHERE id = ${req.params.id} RETURNING *

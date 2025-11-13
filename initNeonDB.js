@@ -220,7 +220,7 @@ async function initDB() {
       ON CONFLICT DO NOTHING;`;
 
     await sql`INSERT INTO almacenes (nombre, tipo) VALUES
-      ('Almacén de Materia Prima', 'MateriaPrima'),
+      ('Almacén de Materia Prima', 'Interno'),
       ('Almacén de Venta', 'Venta')
       ON CONFLICT DO NOTHING;`;
 
