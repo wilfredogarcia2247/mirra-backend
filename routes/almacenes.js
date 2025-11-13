@@ -5,8 +5,8 @@ const sql = neon(process.env.DATABASE_URL);
 
 function validarAlmacen(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
-  // Tipo sigue soportado por compatibilidad; ademas se puede usar el flag es_materia_prima
-  if (!body.tipo || !['MateriaPrima', 'Venta'].includes(body.tipo)) return 'Tipo inválido';
+  // Tipo soportado: solo 'Venta' o 'Interno'
+  if (!body.tipo || !['Venta', 'Interno'].includes(body.tipo)) return 'Tipo inválido';
   if (body.es_materia_prima != null && typeof body.es_materia_prima !== 'boolean') return 'es_materia_prima debe ser booleano';
   if (body.ubicacion && typeof body.ubicacion !== 'string') return 'Ubicacion inválida';
   if (body.responsable && typeof body.responsable !== 'string') return 'Responsable inválido';
@@ -28,7 +28,8 @@ router.post('/', async (req, res) => {
   try {
       const { nombre, tipo, ubicacion, responsable, es_materia_prima } = req.body;
       // Mantener compatibilidad: si se envía es_materia_prima, sincronizar tipo
-      const finalTipo = es_materia_prima === true ? 'MateriaPrima' : (es_materia_prima === false ? 'Venta' : tipo);
+      // ahora true => 'Interno', false => 'Venta'
+      const finalTipo = es_materia_prima === true ? 'Interno' : (es_materia_prima === false ? 'Venta' : tipo);
       const result = await sql`
         INSERT INTO almacenes (nombre, tipo, ubicacion, responsable, es_materia_prima)
         VALUES (${nombre}, ${finalTipo}, ${ubicacion}, ${responsable}, ${es_materia_prima || false}) RETURNING *
