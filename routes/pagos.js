@@ -13,8 +13,31 @@ function validarPago(body) {
 
 router.get('/', async (req, res) => {
   try {
-    const result = await sql`SELECT * FROM pagos`;
-    res.json(result);
+    // Devolver pagos enriquecidos con banco y forma de pago
+    const result = await sql`
+      SELECT p.*, b.nombre AS banco_nombre, b.moneda AS banco_moneda,
+             f.nombre AS forma_nombre, bf.detalles AS forma_detalles
+      FROM pagos p
+      LEFT JOIN bancos b ON b.id = p.banco_id
+      LEFT JOIN formas_pago f ON f.id = p.forma_pago_id
+      LEFT JOIN banco_formas_pago bf ON bf.banco_id = p.banco_id AND bf.forma_pago_id = p.forma_pago_id
+      ORDER BY p.fecha DESC
+    `;
+    const enriched = (result || []).map(r => ({
+      id: r.id,
+      pedido_venta_id: r.pedido_venta_id,
+      forma_pago_id: r.forma_pago_id,
+      banco_id: r.banco_id,
+      monto: r.monto,
+      referencia: r.referencia,
+      fecha_transaccion: r.fecha_transaccion,
+      fecha: r.fecha,
+      tasa: r.tasa,
+      tasa_simbolo: r.tasa_simbolo,
+      banco: r.banco_id ? { id: r.banco_id, nombre: r.banco_nombre, moneda: r.banco_moneda, detalles: r.banco_detalles } : null,
+      forma_pago: r.forma_pago_id ? { id: r.forma_pago_id, nombre: r.forma_nombre, detalles: r.forma_detalles } : null
+    }));
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

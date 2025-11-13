@@ -522,9 +522,34 @@ router.get('/:id/pagos', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
   try {
-    // Seleccionar pagos asociados, ordenados por fecha desc
-    const rows = await sql`SELECT * FROM pagos WHERE pedido_venta_id = ${pedidoId} ORDER BY fecha DESC`;
-    return res.json(rows || []);
+    // Seleccionar pagos asociados con detalles de banco y forma de pago
+    const rows = await sql`
+      SELECT p.*, b.nombre AS banco_nombre, b.moneda AS banco_moneda,
+             f.nombre AS forma_nombre, bf.detalles AS forma_detalles
+      FROM pagos p
+      LEFT JOIN bancos b ON b.id = p.banco_id
+      LEFT JOIN formas_pago f ON f.id = p.forma_pago_id
+      LEFT JOIN banco_formas_pago bf ON bf.banco_id = p.banco_id AND bf.forma_pago_id = p.forma_pago_id
+      WHERE p.pedido_venta_id = ${pedidoId}
+      ORDER BY p.fecha DESC
+    `;
+    const enriched = (rows || []).map(r => {
+      return {
+        id: r.id,
+        pedido_venta_id: r.pedido_venta_id,
+        forma_pago_id: r.forma_pago_id,
+        banco_id: r.banco_id,
+        monto: r.monto,
+        referencia: r.referencia,
+        fecha_transaccion: r.fecha_transaccion,
+        fecha: r.fecha,
+        tasa: r.tasa,
+        tasa_simbolo: r.tasa_simbolo,
+        banco: r.banco_id ? { id: r.banco_id, nombre: r.banco_nombre, moneda: r.banco_moneda, detalles: r.banco_detalles } : null,
+        forma_pago: r.forma_pago_id ? { id: r.forma_pago_id, nombre: r.forma_nombre, detalles: r.forma_detalles } : null
+      };
+    });
+    return res.json(enriched);
   } catch (err) {
     console.error('Error listando pagos por pedido:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error listando pagos' });
