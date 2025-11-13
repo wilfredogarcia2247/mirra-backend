@@ -57,7 +57,7 @@ router.post('/', async (req, res) => {
           const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${banco_id}`;
           const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
           if (moneda) {
-            const tasaRow = await sql`SELECT monto FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
+            const tasaRow = await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
             if (tasaRow && tasaRow[0]) {
               tasaVal = tasaRow[0].monto;
               tasaSimbolo = moneda;
