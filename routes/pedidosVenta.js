@@ -441,6 +441,82 @@ router.post('/:id/finalizar', async (req, res) => {
   }
 });
 
+// POST /api/pedidos-venta/:id/pagos -> registrar pago adicional sin cambiar estado del pedido
+router.post('/:id/pagos', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  const pago = req.body && (req.body.pago || req.body);
+  const pagoError = validarPagoObj(pago);
+  if (pagoError) return res.status(400).json({ error: pagoError });
+  try {
+    await sql`BEGIN`;
+    try {
+      const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+      if (!pedidoRows || pedidoRows.length === 0) {
+        await sql`ROLLBACK`;
+        return res.status(404).json({ error: 'Pedido no encontrado' });
+      }
+
+      // Asegurar existencia de tabla pagos de forma defensiva
+      try {
+        await sql`CREATE TABLE IF NOT EXISTS pagos (
+          id SERIAL PRIMARY KEY,
+          pedido_venta_id INT,
+          forma_pago_id INT,
+          banco_id INT,
+          monto NUMERIC,
+          referencia TEXT,
+          fecha_transaccion TIMESTAMP,
+          fecha TIMESTAMP,
+          tasa NUMERIC,
+          tasa_simbolo VARCHAR(10)
+        );`;
+      } catch (e) {}
+
+      // Determinar tasa según moneda del banco
+      let tasaVal = null;
+      let tasaSimbolo = null;
+      try {
+        if (pago && pago.banco_id != null) {
+          const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pago.banco_id}`;
+          const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+          if (moneda) {
+            const tasaRow = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
+            if (tasaRow && tasaRow[0]) {
+              tasaVal = tasaRow[0].monto;
+              tasaSimbolo = tasaRow[0].simbolo;
+            }
+          }
+        }
+      } catch (e) {
+        // ignore and fallback
+      }
+      if (tasaVal == null) {
+        try {
+          const anyT = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
+          if (anyT && anyT[0]) {
+            tasaVal = anyT[0].monto;
+            tasaSimbolo = anyT[0].simbolo;
+          }
+        } catch (e) {}
+      }
+
+      const inserted = await sql`
+        INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
+        VALUES (${pedidoId}, ${pago.forma_pago_id}, ${pago.banco_id || null}, ${pago.monto}, ${pago.referencia || null}, ${pago.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *
+      `;
+      await sql`COMMIT`;
+      return res.status(201).json({ ok: true, pago: inserted && inserted[0] ? inserted[0] : null });
+    } catch (errTx) {
+      try { await sql`ROLLBACK`; } catch (e) {}
+      throw errTx;
+    }
+  } catch (err) {
+    console.error('Error registrando pago adicional:', err);
+    return res.status(500).json({ error: 'Error registrando pago' });
+  }
+});
+
 // PUT /api/pedidos-venta/:id/status -> cambiar estado con lógica (verificar reservas para 'Enviado', ejecutar completar para 'Completado')
 router.put('/:id/status', async (req, res) => {
   const pedidoId = Number(req.params.id);
