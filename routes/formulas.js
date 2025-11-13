@@ -161,7 +161,7 @@ router.post('/:id/produccion', async (req, res) => {
       const mpInventarios = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
         ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         FOR UPDATE
       `;
@@ -186,7 +186,7 @@ router.post('/:id/produccion', async (req, res) => {
       const mpInventarios = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
         ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         FOR UPDATE
       `;

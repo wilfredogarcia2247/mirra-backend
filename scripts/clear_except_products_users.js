@@ -32,12 +32,12 @@ async function main() {
     await sql`UPDATE inventario SET stock_fisico = 0, stock_comprometido = 0;`;
 
     // Recalcular inventario inicial: asignar el stock declarado en productos.stock al primer almacén de tipo 'Venta'
-    const ventaAlmacen = await sql`SELECT id FROM almacenes WHERE tipo IN ('Venta','Interno') ORDER BY CASE WHEN tipo = 'Venta' THEN 0 ELSE 1 END LIMIT 1`;
+    const ventaAlmacen = await sql`SELECT id FROM almacenes WHERE tipo IN ('venta','interno') ORDER BY CASE WHEN tipo = 'venta' THEN 0 ELSE 1 END LIMIT 1`;
     let ventaAlmacenId = null;
     if (ventaAlmacen && ventaAlmacen.length > 0) ventaAlmacenId = ventaAlmacen[0].id;
     if (!ventaAlmacenId) {
-      console.log('No se encontró almacén de tipo Venta o Interno. Creando uno por defecto.');
-      const created = await sql`INSERT INTO almacenes (nombre, tipo) VALUES ('Almacén de Venta', 'Venta') RETURNING id`;
+      console.log('No se encontró almacén de tipo venta o interno. Creando uno por defecto.');
+      const created = await sql`INSERT INTO almacenes (nombre, tipo) VALUES ('Almacén de Venta', 'venta') RETURNING id`;
       ventaAlmacenId = created[0].id;
     }
 

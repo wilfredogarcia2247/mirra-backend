@@ -117,7 +117,7 @@
         "type": "object",
         "properties": {
           "nombre": { "type": "string" },
-          "tipo": { "type": "string", "enum": ["MateriaPrima", "ProductoTerminado"] },
+          "tipo": { "type": "string", "enum": ["interno", "ProductoTerminado"] },
           "unidad": { "type": "string" },
           "stock": { "type": "integer" },
           "costo": { "type": "number" },
@@ -167,7 +167,7 @@
         "type": "object",
         "properties": {
           "nombre": { "type": "string" },
-          "tipo": { "type": "string", "enum": ["MateriaPrima", "Venta"] },
+          "tipo": { "type": "string", "enum": ["interno", "venta"] },
           "ubicacion": { "type": "string" },
           "responsable": { "type": "string" }
         },

@@ -38,7 +38,7 @@ describe('Pagos E2E: finalizar pedido con pago y tasa aplicada', () => {
     // 5) Obtener un almacén de tipo Venta
     const almacenesRes = await request(app).get('/api/almacenes').set(authHeader);
     expect(almacenesRes.statusCode).toBe(200);
-    const ventaAlmacen = (almacenesRes.body || []).find(a => a.tipo === 'Venta');
+    const ventaAlmacen = (almacenesRes.body || []).find(a => a.tipo === 'venta');
     expect(ventaAlmacen).toBeDefined();
 
     // 6) Añadir stock al almacén de Venta

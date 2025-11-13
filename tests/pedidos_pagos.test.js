@@ -31,7 +31,7 @@ describe('GET /api/pedidos-venta/:id/pagos', () => {
     // poner stock
     const almacenesRes = await request(app).get('/api/almacenes').set(authHeader);
     expect(almacenesRes.statusCode).toBe(200);
-    const ventaAlmacen = (almacenesRes.body || []).find(a => a.tipo === 'Venta');
+    const ventaAlmacen = (almacenesRes.body || []).find(a => a.tipo === 'venta');
     expect(ventaAlmacen).toBeDefined();
     const invRes = await request(app).post(`/api/productos/${prod.id}/almacen`).set(authHeader).send({ almacen_id: ventaAlmacen.id, cantidad: 5 });
     expect([200,201]).toContain(invRes.statusCode);

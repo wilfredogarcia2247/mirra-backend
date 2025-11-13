@@ -35,7 +35,7 @@ describe('POST /api/pedidos-venta/:id/pagos', () => {
     // obtener almacen Venta
     const almacenesRes = await request(app).get('/api/almacenes').set(authHeader);
     expect(almacenesRes.statusCode).toBe(200);
-    const ventaAlmacen = (almacenesRes.body || []).find(a => a.tipo === 'Venta');
+    const ventaAlmacen = (almacenesRes.body || []).find(a => a.tipo === 'venta');
     expect(ventaAlmacen).toBeDefined();
 
     // agregar stock

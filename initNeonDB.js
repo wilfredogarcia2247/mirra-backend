@@ -207,12 +207,12 @@ async function initDB() {
       ON CONFLICT DO NOTHING;`;
 
     await sql`INSERT INTO productos (nombre, tipo, unidad, stock, costo, proveedor_id) VALUES
-      ('Esencia de Jazmín', 'MateriaPrima', 'ml', 1000, 0.5, 1),
-      ('Alcohol de Perfumería', 'MateriaPrima', 'ml', 5000, 0.2, 1),
-      ('Fijador', 'MateriaPrima', 'ml', 2000, 0.3, 1),
-      ('Frasco de Vidrio 50ml', 'MateriaPrima', 'unidad', 200, 1.0, 2),
-      ('Tapa Atomizadora', 'MateriaPrima', 'unidad', 200, 0.5, 2),
-      ('Etiqueta "Floral N°5"', 'MateriaPrima', 'unidad', 200, 0.1, 2)
+      ('Esencia de Jazmín', 'interno', 'ml', 1000, 0.5, 1),
+      ('Alcohol de Perfumería', 'interno', 'ml', 5000, 0.2, 1),
+      ('Fijador', 'interno', 'ml', 2000, 0.3, 1),
+      ('Frasco de Vidrio 50ml', 'interno', 'unidad', 200, 1.0, 2),
+      ('Tapa Atomizadora', 'interno', 'unidad', 200, 0.5, 2),
+      ('Etiqueta "Floral N°5"', 'interno', 'unidad', 200, 0.1, 2)
       ON CONFLICT DO NOTHING;`;
 
     await sql`INSERT INTO productos (nombre, tipo, unidad, stock, precio_venta) VALUES
@@ -220,9 +220,24 @@ async function initDB() {
       ON CONFLICT DO NOTHING;`;
 
     await sql`INSERT INTO almacenes (nombre, tipo) VALUES
-      ('Almacén de Materia Prima', 'Interno'),
-      ('Almacén de Venta', 'Venta')
+      ('Almacén de Materia Prima', 'interno'),
+      ('Almacén de Venta', 'venta')
       ON CONFLICT DO NOTHING;`;
+
+    // Asegurar que exista al menos un almacén de cada tipo (compatibilidad con tests)
+    try {
+      await sql`INSERT INTO almacenes (nombre, tipo) SELECT 'Almacén de Venta', 'venta' WHERE NOT EXISTS (SELECT 1 FROM almacenes WHERE tipo = 'venta')`;
+    } catch(e) {}
+    try {
+      await sql`INSERT INTO almacenes (nombre, tipo) SELECT 'Almacén Interno', 'interno' WHERE NOT EXISTS (SELECT 1 FROM almacenes WHERE tipo = 'interno')`;
+    } catch(e) {}
+    // Normalizar valores históricos: convertir 'Venta' -> 'venta' y 'MateriaPrima' -> 'interno'
+    try {
+      await sql`UPDATE almacenes SET tipo = 'venta' WHERE tipo ILIKE 'venta' OR tipo = 'Venta'`;
+    } catch(e) {}
+    try {
+      await sql`UPDATE almacenes SET tipo = 'interno' WHERE tipo ILIKE 'materia%' OR tipo = 'MateriaPrima' OR tipo = 'Interno'`;
+    } catch(e) {}
 
     await sql`INSERT INTO formulas (producto_terminado_id) VALUES (7)
       ON CONFLICT DO NOTHING;`;

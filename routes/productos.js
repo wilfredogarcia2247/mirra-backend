@@ -6,7 +6,7 @@ const sql = neon(process.env.DATABASE_URL);
 // Validación básica
 function validarProducto(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
-  if (!body.tipo || !['MateriaPrima', 'ProductoTerminado'].includes(body.tipo)) return 'Tipo inválido';
+  if (!body.tipo || !['interno', 'ProductoTerminado'].includes(body.tipo)) return 'Tipo inválido';
   if (!body.unidad || typeof body.unidad !== 'string') return 'Unidad requerida';
   if (body.stock != null && isNaN(Number(body.stock))) return 'Stock debe ser numérico';
   if (body.image_url != null && typeof body.image_url !== 'string') return 'image_url debe ser string';

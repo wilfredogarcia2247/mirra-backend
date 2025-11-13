@@ -101,7 +101,7 @@ router.post('/', async (req, res) => {
         const inventariosVenta = await sql`
           SELECT i.* FROM inventario i
             JOIN almacenes a ON a.id = i.almacen_id
-            WHERE i.producto_id = ${p.producto_id} AND a.tipo IN ('Venta','Interno')
+            WHERE i.producto_id = ${p.producto_id} AND a.tipo IN ('venta','interno')
           ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         `;
         for (const inv of inventariosVenta) {
@@ -129,11 +129,11 @@ router.post('/', async (req, res) => {
           // Verificar disponibilidad de materia prima para producir qtyNeeded unidades
           for (const comp of componentes) {
             const required = Number(comp.cantidad) * qtyNeeded;
-            // sumar stock disponible en almacenes MateriaPrima
+            // sumar stock disponible en almacenes interno
             const mpInventarios = await sql`
               SELECT i.* FROM inventario i
               JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
               ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
             `;
             let totalDisponible = 0;
@@ -155,7 +155,7 @@ router.post('/', async (req, res) => {
             const mpInventarios = await sql`
               SELECT i.* FROM inventario i
               JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
               ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
             `;
             for (const inv of mpInventarios) {
@@ -302,7 +302,7 @@ async function completarPedidoTransaccional(pedidoId) {
       const invs = await sql`
       SELECT i.* FROM inventario i
       JOIN almacenes a ON a.id = i.almacen_id
-      WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('Venta','Interno') AND i.stock_comprometido > 0
+      WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND i.stock_comprometido > 0
       ORDER BY i.stock_comprometido DESC
       FOR UPDATE
     `;

@@ -62,9 +62,9 @@ router.post('/:id/completar', async (req, res) => {
       await sql`ROLLBACK`;
       return res.status(404).json({ error: 'Almacén destino no encontrado' });
     }
-    if (dest[0].tipo !== 'Venta') {
+    if (dest[0].tipo !== 'venta') {
       await sql`ROLLBACK`;
-      return res.status(400).json({ error: 'Almacén destino debe ser de tipo Venta' });
+      return res.status(400).json({ error: "Almacén destino debe ser de tipo 'venta'" });
     }
 
     // Obtener componentes de la fórmula
