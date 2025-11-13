@@ -356,36 +356,32 @@ async function completarPedidoTransaccional(pedidoId) {
       let tasaVal = null;
       let tasaSimbolo = null;
       try {
-        if (pagoObj.banco_id != null && pagoObj.forma_pago_id != null) {
-          // Primero intentar obtener detalles específicos de la combinación banco+forma
+        // Priorizar la moneda del banco y su tasa activa si está disponible
+        if (pagoObj.banco_id != null) {
+          try {
+            const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pagoObj.banco_id}`;
+            const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+            if (moneda) {
+              const tasaRow = await sql`SELECT monto FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
+              if (tasaRow && tasaRow[0]) {
+                tasaVal = tasaRow[0].monto;
+                tasaSimbolo = moneda; // usar el símbolo del banco
+              }
+            }
+          } catch (e) {}
+        }
+        // Si no se obtuvo tasa desde la moneda del banco, intentar detalles por combinación banco+forma
+        if (tasaVal == null && pagoObj.banco_id != null && pagoObj.forma_pago_id != null) {
           try {
             const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pagoObj.banco_id} AND forma_pago_id = ${pagoObj.forma_pago_id} LIMIT 1`;
             if (bf && bf[0] && bf[0].detalles) {
               const det = bf[0].detalles;
-              // det puede contener 'tasa' y/o 'tasa_simbolo' o 'simbolo'
-              if (det.tasa != null) {
-                tasaVal = det.tasa;
-              }
-              if (det.tasa_simbolo) {
-                tasaSimbolo = det.tasa_simbolo;
-              } else if (det.simbolo) {
-                tasaSimbolo = det.simbolo;
-              }
+              if (det.tasa != null) tasaVal = det.tasa;
+              if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo;
+              else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
             }
           } catch (e) {
-            // ignore and fallback
-          }
-        }
-        // Si no se obtuvo de la combinación banco+forma, intentar por moneda del banco
-        if (tasaVal == null && pagoObj.banco_id != null) {
-          const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pagoObj.banco_id}`;
-          const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
-          if (moneda) {
-            const tasaRow = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
-            if (tasaRow && tasaRow[0]) {
-              tasaVal = tasaRow[0].monto;
-              tasaSimbolo = tasaRow[0].simbolo;
-            }
+            // ignore
           }
         }
       } catch (e) {
@@ -498,27 +494,29 @@ router.post('/:id/pagos', async (req, res) => {
       let tasaVal = null;
       let tasaSimbolo = null;
       try {
+        // Priorizar moneda del banco y su tasa activa
         if (pago && pago.banco_id != null) {
-          // Intentar obtener tasa desde la asociación banco_formas_pago.detalles
           try {
-            const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pago.banco_id} AND forma_pago_id = ${pago.forma_pago_id} LIMIT 1`;
-            if (bf && bf[0] && bf[0].detalles) {
-              const det = bf[0].detalles;
-              if (det.tasa != null) tasaVal = det.tasa;
-              if (det.tasa_simbolo) tasaSimbolo = det.tasa_simbolo; else if (det.simbolo) tasaSimbolo = det.simbolo;
-            }
-          } catch (e) {}
-          // Fallback: si no se obtuvo, usar moneda del banco
-          if (tasaVal == null) {
             const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pago.banco_id}`;
             const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
             if (moneda) {
-              const tasaRow = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
+              const tasaRow = await sql`SELECT monto FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
               if (tasaRow && tasaRow[0]) {
                 tasaVal = tasaRow[0].monto;
-                tasaSimbolo = tasaRow[0].simbolo;
+                tasaSimbolo = moneda;
               }
             }
+          } catch (e) {}
+          // Fallback: si no se obtuvo tasa desde moneda del banco, verificar detalles por banco+forma
+          if (tasaVal == null) {
+            try {
+              const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pago.banco_id} AND forma_pago_id = ${pago.forma_pago_id} LIMIT 1`;
+              if (bf && bf[0] && bf[0].detalles) {
+                const det = bf[0].detalles;
+                if (det.tasa != null) tasaVal = det.tasa;
+                if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo; else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
+              }
+            } catch (e) {}
           }
         }
       } catch (e) {
