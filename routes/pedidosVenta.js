@@ -517,6 +517,20 @@ router.post('/:id/pagos', async (req, res) => {
   }
 });
 
+// GET /api/pedidos-venta/:id/pagos -> listar pagos asociados a un pedido
+router.get('/:id/pagos', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    // Seleccionar pagos asociados, ordenados por fecha desc
+    const rows = await sql`SELECT * FROM pagos WHERE pedido_venta_id = ${pedidoId} ORDER BY fecha DESC`;
+    return res.json(rows || []);
+  } catch (err) {
+    console.error('Error listando pagos por pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error listando pagos' });
+  }
+});
+
 // PUT /api/pedidos-venta/:id/status -> cambiar estado con lógica (verificar reservas para 'Enviado', ejecutar completar para 'Completado')
 router.put('/:id/status', async (req, res) => {
   const pedidoId = Number(req.params.id);

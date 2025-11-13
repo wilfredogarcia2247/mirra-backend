@@ -48,6 +48,18 @@ router.post('/', async (req, res) => {
         return res.status(201).json(created[0]);
       } catch (e) {
         try { await sql`ROLLBACK`; } catch (er) {}
+        // If another concurrent request created the active rate, return that existing active row
+        const msg = e && e.message ? e.message : '';
+        if (msg.includes('idx_tasas_cambio_activo_true') || msg.includes('unique')) {
+          try {
+            const existing = await sql`SELECT * FROM tasas_cambio WHERE simbolo = ${simbolo.trim()} AND activo = TRUE ORDER BY id DESC`;
+            if (existing && existing.length > 0) {
+              return res.status(200).json(existing[0]);
+            }
+          } catch (fetchErr) {
+            console.error('Error fetching existing active tasa after unique conflict:', fetchErr && fetchErr.message ? fetchErr.message : fetchErr);
+          }
+        }
         throw e;
       }
     } else {
