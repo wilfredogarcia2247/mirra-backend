@@ -48,7 +48,8 @@ router.post('/', async (req, res) => {
   if (error) return res.status(400).json({ error });
   try {
     const { pedido_venta_id, forma_pago_id, banco_id, monto } = req.body;
-    // Determinar tasa y simbolo: priorizar moneda del banco y su tasa activa
+    // Determinar tasa y simbolo: priorizar moneda del banco y su tasa activa,
+    // fallback a detalles específicos por banco+forma y finalmente a cualquier tasa activa
     let tasaVal = null;
     let tasaSimbolo = null;
     try {
@@ -64,11 +65,34 @@ router.post('/', async (req, res) => {
             }
           }
         } catch (e) {}
+
+        // Si no se obtuvo tasa desde la moneda del banco, verificar detalles por banco+forma
+        if (tasaVal == null && forma_pago_id != null) {
+          try {
+            const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${banco_id} AND forma_pago_id = ${forma_pago_id} LIMIT 1`;
+            if (bf && bf[0] && bf[0].detalles) {
+              const det = bf[0].detalles;
+              if (det.tasa != null) tasaVal = det.tasa;
+              if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo;
+              else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
+            }
+          } catch (e) {}
+        }
       }
-      
     } catch (e) {}
 
-    const result = await sql`INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, fecha, tasa, tasa_simbolo) VALUES (${pedido_venta_id}, ${forma_pago_id}, ${banco_id}, ${monto}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *`;
+    // Fallback a cualquier tasa activa si aún no tenemos una
+    if (tasaVal == null) {
+      try {
+        const anyT = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
+        if (anyT && anyT[0]) {
+          tasaVal = anyT[0].monto;
+          tasaSimbolo = anyT[0].simbolo;
+        }
+      } catch (e) {}
+    }
+
+    const result = await sql`INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo) VALUES (${pedido_venta_id}, ${forma_pago_id}, ${banco_id}, ${monto}, ${req.body.referencia || null}, ${req.body.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *`;
     res.status(201).json(result[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
