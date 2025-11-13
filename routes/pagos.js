@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
       fecha: r.fecha,
       tasa: r.tasa,
       tasa_simbolo: r.tasa_simbolo,
-      banco: r.banco_id ? { id: r.banco_id, nombre: r.banco_nombre, moneda: r.banco_moneda, detalles: r.banco_detalles } : null,
+      banco: r.banco_id ? { id: r.banco_id, nombre: r.banco_nombre, moneda: r.banco_moneda } : null,
       forma_pago: r.forma_pago_id ? { id: r.forma_pago_id, nombre: r.forma_nombre, detalles: r.forma_detalles } : null
     }));
     res.json(enriched);
@@ -48,7 +48,31 @@ router.post('/', async (req, res) => {
   if (error) return res.status(400).json({ error });
   try {
     const { pedido_venta_id, forma_pago_id, banco_id, monto } = req.body;
-    const result = await sql`INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, fecha) VALUES (${pedido_venta_id}, ${forma_pago_id}, ${banco_id}, ${monto}, NOW()) RETURNING *`;
+    // Determinar tasa y simbolo: preferir valores definidos en banco_formas_pago.detalles
+    let tasaVal = null;
+    let tasaSimbolo = null;
+    try {
+      if (banco_id != null && forma_pago_id != null) {
+        const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${banco_id} AND forma_pago_id = ${forma_pago_id} LIMIT 1`;
+        if (bf && bf[0] && bf[0].detalles) {
+          const det = bf[0].detalles;
+          if (det.tasa != null) tasaVal = det.tasa;
+          if (det.tasa_simbolo) tasaSimbolo = det.tasa_simbolo; else if (det.simbolo) tasaSimbolo = det.simbolo;
+        }
+      }
+    } catch (e) {}
+    if (tasaVal == null && banco_id != null) {
+      try {
+        const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${banco_id}`;
+        const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+        if (moneda) {
+          const tasaRow = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE AND simbolo = ${moneda} LIMIT 1`;
+          if (tasaRow && tasaRow[0]) { tasaVal = tasaRow[0].monto; tasaSimbolo = tasaRow[0].simbolo; }
+        }
+      } catch (e) {}
+    }
+
+    const result = await sql`INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, fecha, tasa, tasa_simbolo) VALUES (${pedido_venta_id}, ${forma_pago_id}, ${banco_id}, ${monto}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *`;
     res.status(201).json(result[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
