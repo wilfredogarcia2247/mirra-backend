@@ -60,16 +60,12 @@ router.post('/', async (req, res) => {
         `;
         const disponibleTotal = totalDisponibleRows && totalDisponibleRows[0] ? Number(totalDisponibleRows[0].disponible_total) : 0;
         if (disponibleTotal < qtyNeeded) {
-          // Si no hay suficiente stock total, verificar si existe fórmula para producir
-          const formulaCheck = await sql`SELECT id FROM formulas WHERE producto_terminado_id = ${p.producto_id}`;
-          if (!formulaCheck || formulaCheck.length === 0) {
-            // Obtener nombre del producto para mensaje más claro
-            const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
-            const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
-            await sql`ROLLBACK`;
-            return res.status(400).json({ error: 'Stock insuficiente', details: { producto_id: p.producto_id, producto_nombre: productoNombre, requerido: qtyNeeded, disponible: disponibleTotal } });
-          }
-          // Si hay fórmula, continuamos con la lógica de producir (se verificará materia prima más abajo)
+          // Para pedidos públicos: no se permite crear pedidos si la disponibilidad total
+          // (stock_fisico - stock_comprometido) en almacenes de venta es insuficiente.
+          const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
+          const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: 'Stock insuficiente', details: { producto_id: p.producto_id, producto_nombre: productoNombre, requerido: qtyNeeded, disponible: disponibleTotal } });
         }
 
         const inventariosVenta = await sql`
