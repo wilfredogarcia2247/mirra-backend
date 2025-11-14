@@ -62,7 +62,7 @@ router.post('/:id/completar', async (req, res) => {
       await sql`ROLLBACK`;
       return res.status(404).json({ error: 'Almacén destino no encontrado' });
     }
-    if (dest[0].tipo !== 'venta') {
+    if (String(dest[0].tipo).toLowerCase() !== 'venta') {
       await sql`ROLLBACK`;
       return res.status(400).json({ error: "Almacén destino debe ser de tipo 'venta'" });
     }
@@ -83,7 +83,7 @@ router.post('/:id/completar', async (req, res) => {
         const mpInventarios = await sql`
           SELECT i.* FROM inventario i
           JOIN almacenes a ON a.id = i.almacen_id
-          WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+          WHERE i.producto_id = ${comp.materia_prima_id} AND LOWER(a.tipo) = 'interno'
           ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
           FOR UPDATE
         `;
