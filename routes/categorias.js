@@ -12,8 +12,24 @@ function validarCategoria(body) {
 // Listar categorías
 router.get('/', async (req, res) => {
   try {
-    const rows = await sql`SELECT * FROM categorias ORDER BY nombre`;
-    res.json(rows || []);
+    // Traer categorías y para cada una agregar productos que estén en almacenes de tipo 'venta'
+    const cats = await sql`SELECT * FROM categorias ORDER BY nombre`;
+    const categorias = [];
+    for (const c of (cats || [])) {
+      const productos = await sql`
+        SELECT p.id, p.nombre, p.precio_venta,
+          COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
+        FROM productos p
+        JOIN inventario i ON i.producto_id = p.id
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE p.categoria_id = ${c.id} AND a.tipo = 'venta'
+        GROUP BY p.id, p.nombre, p.precio_venta
+        HAVING COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) > 0
+        ORDER BY p.nombre
+      `;
+      categorias.push({ ...c, productos: productos || [] });
+    }
+    res.json(categorias);
   } catch (err) {
     console.error('Error listando categorias:', err);
     res.status(500).json({ error: 'Error listando categorias' });
@@ -44,7 +60,19 @@ router.get('/:id', async (req, res) => {
   try {
     const rows = await sql`SELECT * FROM categorias WHERE id = ${id}`;
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    res.json(rows[0]);
+    const c = rows[0];
+    const productos = await sql`
+      SELECT p.id, p.nombre, p.precio_venta,
+        COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
+      FROM productos p
+      JOIN inventario i ON i.producto_id = p.id
+      JOIN almacenes a ON a.id = i.almacen_id
+      WHERE p.categoria_id = ${c.id} AND a.tipo = 'venta'
+      GROUP BY p.id, p.nombre, p.precio_venta
+      HAVING COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) > 0
+      ORDER BY p.nombre
+    `;
+    res.json({ ...c, productos: productos || [] });
   } catch (e) {
     console.error('Error obteniendo categoria:', e);
     res.status(500).json({ error: 'Error obteniendo categoria' });
