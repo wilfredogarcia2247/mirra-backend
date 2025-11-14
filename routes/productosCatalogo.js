@@ -85,9 +85,10 @@ router.get('/', async (req, res) => {
     if (prodIds.length === 0) return res.json([]);
 
     const rows = await sql`
-      SELECT p.*, c.nombre AS categoria_nombre, c.descripcion AS categoria_descripcion, COALESCE(inv_tot.stock_disponible_total, 0) AS stock, COALESCE(inv_arr.inventario, '[]'::json) AS inventario
+      SELECT p.*, c.nombre AS categoria_nombre, c.descripcion AS categoria_descripcion, m.nombre AS marca_nombre, COALESCE(inv_tot.stock_disponible_total, 0) AS stock, COALESCE(inv_arr.inventario, '[]'::json) AS inventario
       FROM productos p
       LEFT JOIN categorias c ON c.id = p.categoria_id
+      LEFT JOIN marcas m ON m.id = p.marca_id
       LEFT JOIN (
         SELECT producto_id, json_agg(json_build_object(
           'id', i.id,
@@ -127,6 +128,10 @@ router.get('/', async (req, res) => {
         nombre: p.categoria_nombre || null,
         descripcion: p.categoria_descripcion || null
       } : null;
+      const marca = p.marca_id ? {
+        id: p.marca_id,
+        nombre: p.marca_nombre || null
+      } : null;
       return {
         id: p.id,
         nombre: p.nombre,
@@ -135,6 +140,7 @@ router.get('/', async (req, res) => {
         precio_venta: p.precio_venta,
         image_url: p.image_url,
         categoria,
+        marca,
         inventario
       };
     });
