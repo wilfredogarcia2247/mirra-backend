@@ -76,6 +76,15 @@ router.post('/', async (req, res) => {
   if (error) return res.status(400).json({ error });
   try {
     const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPost;
+    // Validar existencia de categoria y marca si vienen presentes
+    if (categoria_id != null) {
+      const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
+      if (!cat || cat.length === 0) return res.status(400).json({ error: 'categoria_id no existe' });
+    }
+    if (marca_id != null) {
+      const m = await sql`SELECT id FROM marcas WHERE id = ${marca_id}`;
+      if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
+    }
     const result = await sql`
       INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id)
       VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
@@ -145,6 +154,15 @@ router.put('/:id', async (req, res) => {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
     const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPut;
+    // Validar existencia de categoria y marca si vienen presentes
+    if (categoria_id != null) {
+      const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
+      if (!cat || cat.length === 0) return res.status(400).json({ error: 'categoria_id no existe' });
+    }
+    if (marca_id != null) {
+      const m = await sql`SELECT id FROM marcas WHERE id = ${marca_id}`;
+      if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
+    }
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
