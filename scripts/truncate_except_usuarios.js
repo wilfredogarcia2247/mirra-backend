@@ -12,12 +12,12 @@ async function main() {
   }
 
   try {
-    // Ejecutar truncado dinámico: truncar todas las tablas excepto 'usuarios'
+    // Ejecutar truncado dinámico: truncar todas las tablas excepto 'usuarios' y 'formas_pago'
     await sql`
       DO $$
       DECLARE r RECORD;
       BEGIN
-        FOR r IN SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type='BASE TABLE' AND table_name <> 'usuarios' LOOP
+        FOR r IN SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type='BASE TABLE' AND table_name NOT IN ('usuarios','formas_pago') LOOP
           EXECUTE format('TRUNCATE TABLE "%I" RESTART IDENTITY CASCADE', r.table_name);
         END LOOP;
       END$$;
