@@ -143,9 +143,10 @@ router.post('/:id/produccion', async (req, res) => {
       await sql`ROLLBACK`;
       return res.status(404).json({ error: 'Almacén destino no encontrado' });
     }
-    if (dest[0].tipo !== 'Venta') {
+    // Validación: el almacén destino no debe estar marcado como materia prima
+    if (dest[0].es_materia_prima === true) {
       await sql`ROLLBACK`;
-      return res.status(400).json({ error: 'El almacén destino debe ser de tipo Venta' });
+      return res.status(400).json({ error: 'El almacén destino no puede ser marcado como materia prima' });
     }
 
     // Obtener componentes
@@ -161,7 +162,7 @@ router.post('/:id/produccion', async (req, res) => {
       const mpInventarios = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
+        WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima = true
         ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         FOR UPDATE
       `;
@@ -186,7 +187,7 @@ router.post('/:id/produccion', async (req, res) => {
       const mpInventarios = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
+        WHERE i.producto_id = ${comp.materia_prima_id} AND LOWER(a.tipo) = 'interno'
         ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         FOR UPDATE
       `;

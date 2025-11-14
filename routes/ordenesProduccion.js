@@ -35,7 +35,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Completar una orden de producción: consumir materia prima y guardar producto terminado en almacén Venta
+// Completar una orden de producción: consumir materia prima y guardar producto terminado en almacén destino
 // POST /api/ordenes-produccion/:id/completar
 // Body: { almacen_venta_id }
 router.post('/:id/completar', async (req, res) => {
@@ -56,15 +56,15 @@ router.post('/:id/completar', async (req, res) => {
       return res.status(400).json({ error: 'Orden ya está completada' });
     }
 
-    // Verificar almacén destino
+    // Verificar almacén destino: no debe estar marcado como materia prima
     const dest = await sql`SELECT * FROM almacenes WHERE id = ${almacen_venta_id} FOR NO KEY UPDATE`;
     if (!dest || dest.length === 0) {
       await sql`ROLLBACK`;
       return res.status(404).json({ error: 'Almacén destino no encontrado' });
     }
-    if (String(dest[0].tipo).toLowerCase() !== 'venta') {
+    if (dest[0].es_materia_prima === true) {
       await sql`ROLLBACK`;
-      return res.status(400).json({ error: "Almacén destino debe ser de tipo 'venta'" });
+      return res.status(400).json({ error: 'El almacén destino no puede ser marcado como materia prima' });
     }
 
     // Obtener componentes de la fórmula
@@ -77,16 +77,16 @@ router.post('/:id/completar', async (req, res) => {
     const qty = Number(ord.cantidad);
     const movimientos = [];
 
-    // Verificar disponibilidad y consumir materia prima
-      for (const comp of componentes) {
+    // Verificar disponibilidad y consumir materia prima desde almacenes marcados como materia prima
+    for (const comp of componentes) {
       let required = Number(comp.cantidad) * qty;
-        const mpInventarios = await sql`
-          SELECT i.* FROM inventario i
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE i.producto_id = ${comp.materia_prima_id} AND LOWER(a.tipo) = 'interno'
-          ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-          FOR UPDATE
-        `;
+      const mpInventarios = await sql`
+        SELECT i.* FROM inventario i
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima = true
+        ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+        FOR UPDATE
+      `;
       let totalAvailable = 0;
       for (const inv of mpInventarios) totalAvailable += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
       if (totalAvailable < required) {
@@ -98,8 +98,6 @@ router.post('/:id/completar', async (req, res) => {
         const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
         if (available <= 0) continue;
         const take = Math.min(available, required);
-        // Restar stock_fisico
-        // Consumir de forma segura: no dejar stock negativo
         const consumed = await sql`
           UPDATE inventario
           SET stock_fisico = stock_fisico - ${take}, stock_comprometido = GREATEST(0, stock_comprometido - ${take})
@@ -110,7 +108,6 @@ router.post('/:id/completar', async (req, res) => {
           await sql`ROLLBACK`;
           return res.status(400).json({ error: `Inventario insuficiente al consumir materia prima id ${comp.materia_prima_id}` });
         }
-        // Registrar movimiento
         await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${comp.materia_prima_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Producción orden ' + ordenId})`;
         movimientos.push({ materia_prima_id: comp.materia_prima_id, almacen_id: inv.almacen_id, cantidad: take });
         required -= take;
@@ -128,10 +125,8 @@ router.post('/:id/completar', async (req, res) => {
       const created = await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${prodId}, ${almacen_venta_id}, ${qty}, 0) RETURNING id, producto_id, almacen_id, stock_fisico, stock_comprometido`;
       destinoInv = created[0];
     }
-    // Registrar movimiento de entrada
     await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${prodId}, ${almacen_venta_id}, 'entrada', ${qty}, ${'Producción orden ' + ordenId})`;
 
-    // Actualizar estado de la orden a Completada
     await sql`UPDATE ordenes_produccion SET estado = 'Completada' WHERE id = ${ordenId}`;
 
     await sql`COMMIT`;
