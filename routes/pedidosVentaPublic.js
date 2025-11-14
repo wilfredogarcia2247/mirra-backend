@@ -54,7 +54,7 @@ router.post('/', async (req, res) => {
         const inventariosVenta = await sql`
           SELECT i.* FROM inventario i
             JOIN almacenes a ON a.id = i.almacen_id
-            WHERE i.producto_id = ${p.producto_id} AND a.tipo IN ('venta','interno')
+            WHERE i.producto_id = ${p.producto_id} AND a.es_materia_prima IS NOT TRUE
           ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         `;
         for (const inv of inventariosVenta) {
@@ -78,14 +78,19 @@ router.post('/', async (req, res) => {
             const mpInventarios = await sql`
                 SELECT i.* FROM inventario i
                 JOIN almacenes a ON a.id = i.almacen_id
-                WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'Interno'
+                WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima IS TRUE
                 ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
               `;
             let totalDisponible = 0;
             for (const inv of mpInventarios) totalDisponible += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
             if (totalDisponible < required) {
               await sql`ROLLBACK`;
-              return res.status(400).json({ error: `Materia prima ${comp.materia_prima_id} insuficiente para producir producto ${p.producto_id}` });
+              // Proveer mensaje más claro con cantidades y nombres para facilitar debugging en frontend
+              const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
+              const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
+              const mpRowName = await sql`SELECT nombre FROM productos WHERE id = ${comp.materia_prima_id}`;
+              const mpNombre = mpRowName && mpRowName[0] ? mpRowName[0].nombre : null;
+              return res.status(400).json({ error: `Materia prima insuficiente`, details: { materia_prima_id: comp.materia_prima_id, materia_prima_nombre: mpNombre, producto_id: p.producto_id, producto_nombre: productoNombre, requerido: required, disponible: totalDisponible } });
             }
           }
           const orden = await sql`
@@ -98,7 +103,7 @@ router.post('/', async (req, res) => {
             const mpInventarios = await sql`
               SELECT i.* FROM inventario i
               JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
+              WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima IS TRUE
               ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
             `;
             for (const inv of mpInventarios) {
