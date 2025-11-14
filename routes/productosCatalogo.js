@@ -40,10 +40,50 @@ router.get('/', async (req, res) => {
         }
     }
 
-    // Enriquecer cada producto con inventario por almacén (opcional para front)
-    // Obtener productos con inventario agregado en una sola consulta para rendimiento
-    const prodIds = (result || []).map(r => r.id);
+    // Enriquecer cada producto con inventario por almacén (solo almacenes de venta)
+    // Primero obtener los IDs de productos que tienen inventario en almacenes que NO sean materia prima
+    const patternClause = hasQ ? `%${q}%` : null;
+    let prodIdRows;
+    if (hasQ) {
+      if (includeOut) {
+        prodIdRows = await sql`
+          SELECT DISTINCT p.id FROM productos p
+          JOIN inventario i ON i.producto_id = p.id
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE a.es_materia_prima IS NOT TRUE AND p.nombre ILIKE ${patternClause}
+          ${lim ? sql`LIMIT ${lim}` : sql``}
+        `;
+      } else {
+        prodIdRows = await sql`
+          SELECT DISTINCT p.id FROM productos p
+          JOIN inventario i ON i.producto_id = p.id
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE a.es_materia_prima IS NOT TRUE AND p.nombre ILIKE ${patternClause} AND (i.stock_fisico - i.stock_comprometido) > 0
+          ${lim ? sql`LIMIT ${lim}` : sql``}
+        `;
+      }
+    } else {
+      if (includeOut) {
+        prodIdRows = await sql`
+          SELECT DISTINCT p.id FROM productos p
+          JOIN inventario i ON i.producto_id = p.id
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE a.es_materia_prima IS NOT TRUE
+          ${lim ? sql`LIMIT ${lim}` : sql``}
+        `;
+      } else {
+        prodIdRows = await sql`
+          SELECT DISTINCT p.id FROM productos p
+          JOIN inventario i ON i.producto_id = p.id
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE a.es_materia_prima IS NOT TRUE AND (i.stock_fisico - i.stock_comprometido) > 0
+          ${lim ? sql`LIMIT ${lim}` : sql``}
+        `;
+      }
+    }
+    const prodIds = (prodIdRows || []).map(r => r.id);
     if (prodIds.length === 0) return res.json([]);
+
     const rows = await sql`
       SELECT p.*, COALESCE(inv_tot.stock_disponible_total, 0) AS stock, COALESCE(inv_arr.inventario, '[]'::json) AS inventario
       FROM productos p
@@ -59,11 +99,14 @@ router.get('/', async (req, res) => {
         ) ORDER BY (i.stock_fisico - i.stock_comprometido) DESC) AS inventario
         FROM inventario i
         LEFT JOIN almacenes a ON a.id = i.almacen_id
+        WHERE a.es_materia_prima IS NOT TRUE
         GROUP BY producto_id
       ) inv_arr ON inv_arr.producto_id = p.id
       LEFT JOIN (
         SELECT producto_id, SUM(i.stock_fisico - i.stock_comprometido) AS stock_disponible_total
         FROM inventario i
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE a.es_materia_prima IS NOT TRUE
         GROUP BY producto_id
       ) inv_tot ON inv_tot.producto_id = p.id
       WHERE p.id = ANY(${prodIds})
