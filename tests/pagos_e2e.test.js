@@ -31,7 +31,7 @@ describe('Pagos E2E: finalizar pedido con pago y tasa aplicada', () => {
     expect([200,201]).toContain(tasaRes.statusCode);
 
     // 4) Crear producto
-    const prodRes = await request(app).post('/api/productos').set(authHeader).send({ nombre: 'PagoTest Producto', tipo: 'ProductoTerminado', unidad: 'unidad', stock: 0, costo: 5, precio_venta: 10 });
+    const prodRes = await request(app).post('/api/productos').set(authHeader).send({ nombre: 'PagoTest Producto', unidad: 'unidad', stock: 0, costo: 5, precio_venta: 10 });
     expect(prodRes.statusCode).toBe(201);
     const prod = prodRes.body;
 

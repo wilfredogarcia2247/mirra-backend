@@ -11,7 +11,7 @@ const sql = neon(process.env.DATABASE_URL);
 router.get('/', async (req, res) => {
   try {
     const { q, includeOutOfStock, limit } = req.query;
-    const cols = 'id, nombre, tipo, unidad, stock, precio_venta, image_url';
+    const cols = 'id, nombre, unidad, stock, precio_venta, image_url';
     const hasQ = q && q.toString().trim() !== '';
     const includeOut = includeOutOfStock === 'true';
     const lim = limit && !isNaN(Number(limit)) ? Number(limit) : null;
@@ -21,23 +21,23 @@ router.get('/', async (req, res) => {
 
     // Si no incluimos agotados, traemos y filtramos en JS (evita problemas de sintaxis en algunos clientes SQL)
     if (!includeOut) {
-      if (hasQ) {
-  if (lim) result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern} LIMIT ${lim}`;
-  else result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern}`;
+        if (hasQ) {
+        if (lim) result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern} LIMIT ${lim}`;
+        else result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern}`;
       } else {
-  if (lim) result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos LIMIT ${lim}`;
-  else result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos`;
+        if (lim) result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos LIMIT ${lim}`;
+        else result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos`;
       }
       result = (result || []).filter(r => Number(r.stock) > 0);
     } else {
       // incluir agotados: directamente en SQL
-      if (hasQ) {
-  if (lim) result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern} LIMIT ${lim}`;
-  else result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern}`;
-      } else {
-  if (lim) result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos LIMIT ${lim}`;
-  else result = await sql`SELECT id, nombre, tipo, unidad, stock, precio_venta, image_url FROM productos`;
-      }
+        if (hasQ) {
+      if (lim) result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern} LIMIT ${lim}`;
+      else result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos WHERE nombre ILIKE ${pattern}`;
+        } else {
+      if (lim) result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos LIMIT ${lim}`;
+      else result = await sql`SELECT id, nombre, unidad, stock, precio_venta, image_url FROM productos`;
+        }
     }
 
     // Enriquecer cada producto con inventario por almacén (opcional para front)

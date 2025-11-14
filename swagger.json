@@ -117,7 +117,6 @@
         "type": "object",
         "properties": {
           "nombre": { "type": "string" },
-          "tipo": { "type": "string", "enum": ["interno", "ProductoTerminado"] },
           "categoria_id": { "type": "integer" },
           "marca_id": { "type": "integer" },
           "unidad": { "type": "string" },
@@ -125,7 +124,8 @@
           "costo": { "type": "number" },
           "precio_venta": { "type": "number" },
           "proveedor_id": { "type": "integer" }
-        }
+        },
+        "required": ["nombre"]
       },
       "Proveedor": {
         "type": "object",

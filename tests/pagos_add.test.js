@@ -28,7 +28,7 @@ describe('POST /api/pedidos-venta/:id/pagos', () => {
     expect([200,201]).toContain(tasa.statusCode);
 
     // crear producto
-    const prodRes = await request(app).post('/api/productos').set(authHeader).send({ nombre: 'PagoAdd Producto', tipo: 'ProductoTerminado', unidad: 'u', stock: 0, costo: 1, precio_venta: 10 });
+    const prodRes = await request(app).post('/api/productos').set(authHeader).send({ nombre: 'PagoAdd Producto', unidad: 'u', stock: 0, costo: 1, precio_venta: 10 });
     expect(prodRes.statusCode).toBe(201);
     const prod = prodRes.body;
 

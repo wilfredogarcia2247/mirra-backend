@@ -39,7 +39,6 @@ describe('API Endpoints', () => {
       .set(authHeader)
       .send({
         nombre: 'Test Producto',
-        tipo: 'interno',
         unidad: 'ml',
         stock: 100,
         costo: 1,

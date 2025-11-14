@@ -6,7 +6,7 @@ const sql = neon(process.env.DATABASE_URL);
 // Validación básica
 function validarProducto(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
-  if (!body.tipo || !['interno', 'ProductoTerminado'].includes(body.tipo)) return 'Tipo inválido';
+  // `tipo` ya no es requerido ni enviado por el cliente
   if (body.categoria_id != null && isNaN(Number(body.categoria_id))) return 'categoria_id inválido';
   if (body.marca_id != null && isNaN(Number(body.marca_id))) return 'marca_id inválido';
   if (!body.unidad || typeof body.unidad !== 'string') return 'Unidad requerida';
@@ -75,7 +75,7 @@ router.post('/', async (req, res) => {
     const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPost;
+    const { nombre, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPost;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
       const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
@@ -86,8 +86,8 @@ router.post('/', async (req, res) => {
       if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
     }
     const result = await sql`
-      INSERT INTO productos (nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id)
-      VALUES (${nombre}, ${tipo}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
+      INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id)
+      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
       RETURNING *
     `;
     res.status(201).json(result[0]);
@@ -153,7 +153,7 @@ router.put('/:id', async (req, res) => {
   try {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const { nombre, tipo, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPut;
+    const { nombre, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPut;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
       const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
@@ -166,7 +166,7 @@ router.put('/:id', async (req, res) => {
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, tipo=${tipo}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}
+      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });

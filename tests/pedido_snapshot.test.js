@@ -17,7 +17,7 @@ describe('Pedido precio snapshot', () => {
   test('Al crear pedido se guarda precio_venta y no cambia al actualizar producto', async () => {
     // 1) Crear producto
     const prodRes = await request(app).post('/api/productos').set(authHeader).send({
-      nombre: 'SnapshotTest Producto', tipo: 'ProductoTerminado', unidad: 'unidad', stock: 0, costo: 5, precio_venta: 10
+      nombre: 'SnapshotTest Producto', unidad: 'unidad', stock: 0, costo: 5, precio_venta: 10
     });
     expect(prodRes.statusCode).toBe(201);
     const prod = prodRes.body;
@@ -47,7 +47,7 @@ describe('Pedido precio snapshot', () => {
     expect(Number(linea.precio_venta)).toBe(10);
 
     // 4) Actualizar producto precio
-    const updRes = await request(app).put(`/api/productos/${prod.id}`).set(authHeader).send({ nombre: prod.nombre, tipo: prod.tipo, unidad: prod.unidad, stock: prod.stock, costo: prod.costo, precio_venta: 99 });
+    const updRes = await request(app).put(`/api/productos/${prod.id}`).set(authHeader).send({ nombre: prod.nombre, unidad: prod.unidad, stock: prod.stock, costo: prod.costo, precio_venta: 99 });
     expect(updRes.statusCode).toBe(200);
 
     // 5) Obtener pedido y verificar precio sigue siendo el antiguo

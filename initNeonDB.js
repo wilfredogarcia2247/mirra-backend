@@ -71,7 +71,6 @@ async function initDB() {
     await sql`CREATE TABLE IF NOT EXISTS productos (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
-      tipo VARCHAR(30),
       unidad VARCHAR(20),
       stock INT,
       costo NUMERIC,
@@ -224,17 +223,17 @@ async function initDB() {
       ('Proveedor Frascos', '987654321', 'frascos@proveedor.com')
       ON CONFLICT DO NOTHING;`;
 
-    await sql`INSERT INTO productos (nombre, tipo, unidad, stock, costo, proveedor_id) VALUES
-      ('Esencia de Jazmín', 'interno', 'ml', 1000, 0.5, 1),
-      ('Alcohol de Perfumería', 'interno', 'ml', 5000, 0.2, 1),
-      ('Fijador', 'interno', 'ml', 2000, 0.3, 1),
-      ('Frasco de Vidrio 50ml', 'interno', 'unidad', 200, 1.0, 2),
-      ('Tapa Atomizadora', 'interno', 'unidad', 200, 0.5, 2),
-      ('Etiqueta "Floral N°5"', 'interno', 'unidad', 200, 0.1, 2)
+    await sql`INSERT INTO productos (nombre, unidad, stock, costo, proveedor_id) VALUES
+      ('Esencia de Jazmín', 'ml', 1000, 0.5, 1),
+      ('Alcohol de Perfumería', 'ml', 5000, 0.2, 1),
+      ('Fijador', 'ml', 2000, 0.3, 1),
+      ('Frasco de Vidrio 50ml', 'unidad', 200, 1.0, 2),
+      ('Tapa Atomizadora', 'unidad', 200, 0.5, 2),
+      ('Etiqueta "Floral N°5"', 'unidad', 200, 0.1, 2)
       ON CONFLICT DO NOTHING;`;
 
-    await sql`INSERT INTO productos (nombre, tipo, unidad, stock, precio_venta) VALUES
-      ('Perfume Floral N°5 - 50ml', 'ProductoTerminado', 'unidad', 0, 25.0)
+    await sql`INSERT INTO productos (nombre, unidad, stock, precio_venta) VALUES
+      ('Perfume Floral N°5 - 50ml', 'unidad', 0, 25.0)
       ON CONFLICT DO NOTHING;`;
 
     await sql`INSERT INTO almacenes (nombre, tipo) VALUES

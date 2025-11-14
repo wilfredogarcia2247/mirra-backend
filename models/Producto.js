@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const ProductoSchema = new mongoose.Schema({
   nombre: String,
-  tipo: { type: String, enum: ['interno', 'ProductoTerminado'] },
   unidad: String,
   image_url: String,
   stock: Number,
