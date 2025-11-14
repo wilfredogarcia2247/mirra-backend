@@ -93,6 +93,8 @@ app.use('/api/pagos', authMiddleware, require('./routes/pagos'));
 app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
 // Categorias
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
+// Marcas
+app.use('/api/marcas', authMiddleware, require('./routes/marcas'));
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
