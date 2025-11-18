@@ -91,112 +91,27 @@ router.post('/', async (req, res) => {
   if (error) return res.status(400).json({ error });
   try {
   const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
-    // Ejecutar en transacción: reservar stock de venta, crear orden de producción si hace falta y crear pedido
+    // Ejecutar en transacción: crear pedido y guardar snapshot por línea.
     await sql`BEGIN`;
     try {
-      // Reserva/producción acumulados para retornar
       const produccionesCreadas = [];
-
-      // Primero validar disponibilidad y reservar
-      for (const p of productos) {
-        let qtyNeeded = Number(p.cantidad);
-        if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
-          await sql`ROLLBACK`;
-          return res.status(400).json({ error: 'Cantidad inválida en productos' });
-        }
-        // Intentar reservar desde almacenes de tipo 'Venta'
-        const inventariosVenta = await sql`
-          SELECT i.* FROM inventario i
-            JOIN almacenes a ON a.id = i.almacen_id
-            WHERE i.producto_id = ${p.producto_id} AND a.tipo IN ('venta','interno')
-          ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-        `;
-        for (const inv of inventariosVenta) {
-          const disponible = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
-          if (disponible <= 0) continue;
-          const take = Math.min(disponible, qtyNeeded);
-          await sql`
-            UPDATE inventario SET stock_comprometido = stock_comprometido + ${take} WHERE id = ${inv.id}
-          `;
-          qtyNeeded -= take;
-          if (qtyNeeded === 0) break;
-        }
-
-        if (qtyNeeded > 0) {
-          // No hay suficiente en venta, intentar producir desde materia prima
-          // Buscar fórmula del producto terminado
-          // Preferir fórmula específica por tamaño si se provee tamano_id
-          let formula = [];
-          if (p.tamano_id != null) {
-            formula = await sql`SELECT * FROM formulas WHERE producto_terminado_id = ${p.producto_id} AND tamano_id = ${p.tamano_id}`;
-          }
-          if (!formula || formula.length === 0) {
-            formula = await sql`SELECT * FROM formulas WHERE producto_terminado_id = ${p.producto_id} AND tamano_id IS NULL`;
-          }
-          if (formula.length === 0) {
-            await sql`ROLLBACK`;
-            return res.status(400).json({ error: `Producto ${p.producto_id} sin stock suficiente y sin fórmula para producir` });
-          }
-          const formulaId = formula[0].id;
-          // Obtener componentes
-          const componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${formulaId}`;
-          // Verificar disponibilidad de materia prima para producir qtyNeeded unidades
-          for (const comp of componentes) {
-            const required = Number(comp.cantidad) * qtyNeeded;
-            // sumar stock disponible en almacenes interno
-            const mpInventarios = await sql`
-              SELECT i.* FROM inventario i
-              JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
-              ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-            `;
-            let totalDisponible = 0;
-            for (const inv of mpInventarios) totalDisponible += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
-            if (totalDisponible < required) {
-              await sql`ROLLBACK`;
-              return res.status(400).json({ error: `Materia prima ${comp.materia_prima_id} insuficiente para producir producto ${p.producto_id}` });
-            }
-          }
-          // Si llegamos aquí hay materia prima suficiente -> crear orden de producción
-          const orden = await sql`
-            INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
-            VALUES (${p.producto_id}, ${qtyNeeded}, ${formulaId}, 'Pendiente', NOW()) RETURNING *
-          `;
-          produccionesCreadas.push(orden[0]);
-          // Reservar materia prima (incrementar stock_comprometido) distribuyendo entre inventarios
-          for (const comp of componentes) {
-            let required = Number(comp.cantidad) * qtyNeeded;
-            const mpInventarios = await sql`
-              SELECT i.* FROM inventario i
-              JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.tipo = 'interno'
-              ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-            `;
-            for (const inv of mpInventarios) {
-              if (required <= 0) break;
-              const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
-              if (available <= 0) continue;
-              const take = Math.min(available, required);
-              await sql`UPDATE inventario SET stock_comprometido = stock_comprometido + ${take} WHERE id = ${inv.id}`;
-              required -= take;
-            }
-          }
-        }
-      }
-
-      // Si llegamos aquí, todo reservado/ordenado correctamente -> insertar pedido y sus líneas
       const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
-
       const pedido = await sql`
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, tasa_cambio_monto)
         VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${estado}, NOW(), ${tasaMontoVal}) RETURNING *
       `;
+
       for (const p of productos) {
-        // Obtener precio/costo/nombre al momento del pedido para snapshot
+        // Validar cantidad
+        const qty = Number(p.cantidad);
+        if (isNaN(qty) || qty <= 0) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: 'Cantidad inválida en productos' });
+        }
+        // Obtener precio/costo/nombre al momento del pedido para snapshot (preferir tamano)
         let precioUnitario = null;
         let costoUnitario = null;
         let nombreProducto = null;
-        // Si se dio tamano_id, intentar usar precio/costo/nombre del tamano
         if (p.tamano_id != null) {
           const tamRow = await sql`SELECT precio_venta, costo, nombre FROM tamanos WHERE id = ${p.tamano_id}`;
           if (tamRow && tamRow[0]) {
@@ -205,7 +120,6 @@ router.post('/', async (req, res) => {
             nombreProducto = tamRow[0].nombre != null ? tamRow[0].nombre : null;
           }
         }
-        // Fallback al producto si no hay valores desde tamano
         if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
           const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
           if (prodRow && prodRow[0]) {
@@ -214,28 +128,28 @@ router.post('/', async (req, res) => {
             nombreProducto = nombreProducto == null ? prodRow[0].nombre : nombreProducto;
           }
         }
-        // Guardar snapshot: nombre y precio_venta
+
         await sql`
           INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, tamano_id, cantidad, costo_unitario, precio_venta, nombre_producto, tamano_nombre)
           VALUES (${pedido[0].id}, ${p.producto_id}, ${p.tamano_id || null}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${p.tamano_nombre || null})
         `;
       }
-      // Commit
+
       await sql`COMMIT`;
 
-      // Recuperar y devolver pedido con detalle (como antes)
-        const productosDetalle = await sql`
-          SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
-                 COALESCE(pv.tamano_nombre, tam.nombre) AS tamano_nombre,
-                 COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-                 COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-                 COALESCE(pv.costo_unitario, prod.costo) AS costo,
-                 prod.image_url
-          FROM pedido_venta_productos pv
-          LEFT JOIN productos prod ON prod.id = pv.producto_id
-          LEFT JOIN tamanos tam ON tam.id = pv.tamano_id
-          WHERE pv.pedido_venta_id = ${pedido[0].id}
-        `;
+      // Recuperar y devolver pedido con detalle
+      const productosDetalle = await sql`
+        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
+               COALESCE(pv.tamano_nombre, tam.nombre) AS tamano_nombre,
+               COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+               COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+               COALESCE(pv.costo_unitario, prod.costo) AS costo,
+               prod.image_url
+        FROM pedido_venta_productos pv
+        LEFT JOIN productos prod ON prod.id = pv.producto_id
+        LEFT JOIN tamanos tam ON tam.id = pv.tamano_id
+        WHERE pv.pedido_venta_id = ${pedido[0].id}
+      `;
       let total = 0;
       const productosMapeados = productosDetalle.map(item => {
         const cantidad = Number(item.cantidad);
