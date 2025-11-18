@@ -199,10 +199,17 @@ router.delete('/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
-    // Verificar uso en cliente_bancos
-    const refs = await sql`SELECT COUNT(*)::int AS c FROM cliente_bancos WHERE banco_id = ${id}`;
-    const count = (refs && refs[0] && Number(refs[0].c)) || 0;
-    if (count > 0) return res.status(400).json({ error: 'No se puede eliminar: banco asociado a clientes' });
+    // Verificar uso en cliente_bancos (si la tabla existe)
+    try {
+      const tbl = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cliente_bancos' LIMIT 1`;
+      if (tbl && tbl.length > 0) {
+        const refs = await sql`SELECT COUNT(*)::int AS c FROM cliente_bancos WHERE banco_id = ${id}`;
+        const count = (refs && refs[0] && Number(refs[0].c)) || 0;
+        if (count > 0) return res.status(400).json({ error: 'No se puede eliminar: banco asociado a clientes' });
+      }
+    } catch (e) {
+      // Si la tabla no existe, permitir eliminación
+    }
     const deleted = await sql`DELETE FROM bancos WHERE id = ${id} RETURNING *`;
     if (!deleted || deleted.length === 0) return res.status(404).json({ error: 'Banco no encontrado' });
     res.json({ success: true, banco: deleted[0] });

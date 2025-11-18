@@ -88,42 +88,32 @@ router.get('/', async (req, res) => {
       ) inv_tot ON inv_tot.producto_id = p.id
       WHERE p.id = ANY(${prodIds})
     `;
-    // Obtener tamaños y precios calculados para los productos listados
+    // Obtener fórmulas (ahora sirven como definición de tamaño) para los productos listados
     const productIds = (rows || []).map(r => r.id);
-    let tamanosRows = [];
+    let formulasRows = [];
     if (productIds.length > 0) {
-      tamanosRows = await sql`SELECT * FROM tamanos WHERE producto_id = ANY(${productIds}) ORDER BY producto_id, nombre`;
+      formulasRows = await sql`
+        SELECT id, producto_terminado_id AS producto_id, nombre AS tamano_descripcion, costo, precio_venta
+        FROM formulas WHERE producto_terminado_id = ANY(${productIds}) ORDER BY producto_terminado_id, nombre
+      `;
     }
-    const precioRows = productIds.length > 0 ? await sql`SELECT * FROM precio_productos WHERE producto_id = ANY(${productIds})` : [];
 
-    // Mapear precios por producto_id+tamano_id
-    const precioMap = {};
-    (precioRows || []).forEach(pr => {
-      const key = `${pr.producto_id}:${pr.tamano_id}`;
-      precioMap[key] = pr;
-    });
-
-    // Agrupar tamaños por producto
+    // Agrupar 'tamaños' por producto usando las fórmulas
     const tamanosPorProducto = {};
-    (tamanosRows || []).forEach(t => {
+    (formulasRows || []).forEach(f => {
       const entry = {
-        id: t.id,
-        nombre: t.nombre,
-        cantidad: t.cantidad != null ? Number(t.cantidad) : null,
-        unidad: t.unidad,
-        costo: t.costo != null ? Number(t.costo) : null,
-        precio_venta: t.precio_venta != null ? Number(t.precio_venta) : null,
-        factor_multiplicador_venta: t.factor_multiplicador_venta != null ? Number(t.factor_multiplicador_venta) : null
+        id: f.id, // id de la fórmula
+        nombre: f.tamano_descripcion || null,
+        cantidad: null,
+        unidad: null,
+        costo: f.costo != null ? Number(f.costo) : null,
+        precio_venta: f.precio_venta != null ? Number(f.precio_venta) : null,
+        factor_multiplicador_venta: null,
+        precio_calculado: null,
+        costo_pedido: f.costo != null ? Number(f.costo) : null
       };
-      const key = `${t.producto_id}:${t.id}`;
-      const pr = precioMap[key];
-      entry.precio_calculado = pr ? Number(pr.precio_venta_final) : null;
-      // costo_pedido: costo que se debe usar al crear un pedido (snapshot). Preferir costo calculado en precio_productos
-      if (pr && pr.costo_total_fabricacion != null) entry.costo_pedido = Number(pr.costo_total_fabricacion);
-      else if (t.costo != null) entry.costo_pedido = Number(t.costo);
-      else entry.costo_pedido = null;
-      if (!tamanosPorProducto[t.producto_id]) tamanosPorProducto[t.producto_id] = [];
-      tamanosPorProducto[t.producto_id].push(entry);
+      if (!tamanosPorProducto[f.producto_id]) tamanosPorProducto[f.producto_id] = [];
+      tamanosPorProducto[f.producto_id].push(entry);
     });
 
     const enriched = (rows || []).map(p => {

@@ -18,7 +18,6 @@ async function seed() {
         nombre: 'Perfume Citrus Breeze',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.4, precio_venta: 12.0 },
           { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 0.7, precio_venta: 20.0 },
@@ -29,7 +28,6 @@ async function seed() {
         nombre: 'Perfume Floral Garden',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.45, precio_venta: 13.0 },
           { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 0.8, precio_venta: 22.0 },
@@ -40,7 +38,6 @@ async function seed() {
         nombre: 'Perfume Oriental Night',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.6, precio_venta: 15.0 },
           { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.0, precio_venta: 26.0 },
@@ -55,7 +52,6 @@ async function seed() {
         nombre: 'Aqua Marine Essence',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '15ml', cantidad: 15, unidad: 'ml', costo: 0.25, precio_venta: 8.0 },
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.45, precio_venta: 15.0 },
@@ -66,7 +62,6 @@ async function seed() {
         nombre: 'Woody Musk',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.6, precio_venta: 14.0 },
           { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.0, precio_venta: 25.0 }
@@ -76,7 +71,6 @@ async function seed() {
         nombre: 'Vanilla Bloom',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.5, precio_venta: 13.0 },
           { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 2.0, precio_venta: 50.0 }
@@ -86,7 +80,6 @@ async function seed() {
         nombre: 'Citrus Oud',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.2, precio_venta: 28.0 },
           { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 2.4, precio_venta: 55.0 }
@@ -96,7 +89,7 @@ async function seed() {
 
     perfumes.push(...extraPerfumes);
 
-    // Asegurar marca y categoria y proveedor existen
+    // Asegurar marca y categoria existen (proveedor eliminado)
     for (const p of perfumes) {
       const cat = await sql`SELECT id FROM categorias WHERE nombre = ${p.categoria} LIMIT 1`;
       if (!cat || cat.length === 0) {
@@ -105,10 +98,6 @@ async function seed() {
       const mar = await sql`SELECT id FROM marcas WHERE nombre = ${p.marca} LIMIT 1`;
       if (!mar || mar.length === 0) {
         await sql`INSERT INTO marcas (nombre, descripcion) VALUES (${p.marca}, ${p.marca})`;
-      }
-      const prov = await sql`SELECT id FROM proveedores WHERE nombre = ${p.proveedor} LIMIT 1`;
-      if (!prov || prov.length === 0) {
-        await sql`INSERT INTO proveedores (nombre, telefono, email) VALUES (${p.proveedor}, '000000000', 'proveedor@demo')`;
       }
     }
 
@@ -122,13 +111,12 @@ async function seed() {
       } else {
         const categoriaId = (await sql`SELECT id FROM categorias WHERE nombre = ${p.categoria} LIMIT 1`)[0].id;
         const marcaId = (await sql`SELECT id FROM marcas WHERE nombre = ${p.marca} LIMIT 1`)[0].id;
-        const proveedorId = (await sql`SELECT id FROM proveedores WHERE nombre = ${p.proveedor} LIMIT 1`)[0].id;
         // Insertar sólo si no existe (atomic usando CTE) para evitar conflictos con secuencias
         const prodRes = await sql`
           WITH existing AS (SELECT id FROM productos WHERE nombre = ${p.nombre} LIMIT 1),
           ins AS (
-            INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, proveedor_id, categoria_id, marca_id)
-            SELECT ${p.nombre}, 'unidad', 0, 0, NULL, ${proveedorId}, ${categoriaId}, ${marcaId}
+            INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, categoria_id, marca_id)
+            SELECT ${p.nombre}, 'unidad', 0, 0, NULL, ${categoriaId}, ${marcaId}
             WHERE NOT EXISTS (SELECT 1 FROM existing)
             RETURNING id
           )

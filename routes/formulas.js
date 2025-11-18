@@ -5,8 +5,9 @@ const sql = neon(process.env.DATABASE_URL);
 
 function validarFormula(body) {
   if (!body.producto_terminado_id || isNaN(Number(body.producto_terminado_id))) return 'ID de producto terminado requerido';
-  if (!body.tamano_id || isNaN(Number(body.tamano_id))) return 'ID de tamaño (tamano_id) requerido';
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre de fórmula requerido';
+  if (body.costo == null || isNaN(Number(body.costo))) return 'Costo de la fórmula requerido y debe ser numérico';
+  if (body.precio_venta == null || isNaN(Number(body.precio_venta))) return 'Precio de venta de la fórmula requerido y debe ser numérico';
   if (!Array.isArray(body.componentes) || body.componentes.length === 0) return 'Componentes requeridos';
   for (const c of body.componentes) {
     if (!c.materia_prima_id || isNaN(Number(c.materia_prima_id))) return 'ID de materia prima requerido';
@@ -18,11 +19,13 @@ function validarFormula(body) {
 
 router.get('/', async (req, res) => {
   try {
-    const formulas = await sql`SELECT f.*, t.id AS tamano_id, t.nombre AS tamano_nombre, t.cantidad AS tamano_cantidad, t.unidad AS tamano_unidad, t.costo AS tamano_costo, t.precio_venta AS tamano_precio_venta FROM formulas f LEFT JOIN tamanos t ON t.id = f.tamano_id`;
+    // La tabla `tamanos` puede no existir en este esquema; las "versiones/tamaños" se representan ahora como filas en `formulas`.
+    const formulas = await sql`SELECT f.* FROM formulas f ORDER BY f.producto_terminado_id, f.nombre`;
     for (const f of formulas) {
       f.componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${f.id}`;
-      f.tamano = { id: f.tamano_id, nombre: f.tamano_nombre, cantidad: f.tamano_cantidad, unidad: f.tamano_unidad, costo: f.tamano_costo, precio_venta: f.tamano_precio_venta };
-      delete f.tamano_id; delete f.tamano_nombre; delete f.tamano_cantidad; delete f.tamano_unidad;
+      // Las propiedades de tamaño ahora están en la propia fórmula: nombre, costo, precio_venta
+      f.tamano = { id: f.id, nombre: f.nombre, cantidad: f.cantidad || null, unidad: f.unidad || null, costo: f.costo, precio_venta: f.precio_venta };
+      // Mantener campos de fórmula principales
     }
     res.json(formulas);
   } catch (err) {
@@ -36,16 +39,16 @@ router.post('/', async (req, res) => {
   try {
     // Asegurar columna nombre en DB si por alguna razón la migración no se ejecutó
     try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch (e) {}
+    try { await sql`ALTER TABLE formulas ADD COLUMN costo NUMERIC;`; } catch (e) {}
+    try { await sql`ALTER TABLE formulas ADD COLUMN precio_venta NUMERIC;`; } catch (e) {}
     const { producto_terminado_id, componentes, nombre, tamano_id } = req.body;
+    const { costo, precio_venta } = req.body;
     // Verificar que el tamaño existe y pertenece al producto terminado
-    const t = await sql`SELECT * FROM tamanos WHERE id = ${tamano_id}`;
-    if (!t || t.length === 0) return res.status(400).json({ error: 'Tamaño (tamano_id) no encontrado' });
-    if (t[0].producto_id && Number(t[0].producto_id) !== Number(producto_terminado_id)) {
-      return res.status(400).json({ error: 'El tamaño no pertenece al producto_terminado_id indicado' });
-    }
+    // tamano_id legacy: aceptamos valor si se provee, pero la tabla `tamanos` puede no existir.
+    let tam = tamano_id ? tamano_id : null;
     const formula = await sql`
-      INSERT INTO formulas (producto_terminado_id, nombre, tamano_id)
-      VALUES (${producto_terminado_id}, ${nombre}, ${tamano_id}) RETURNING *
+      INSERT INTO formulas (producto_terminado_id, nombre, tamano_id, costo, precio_venta)
+      VALUES (${producto_terminado_id}, ${nombre}, ${tam}, ${costo}, ${precio_venta}) RETURNING *
     `;
     for (const c of componentes) {
       await sql`
@@ -71,12 +74,10 @@ router.put('/:id', async (req, res) => {
     // Asegurar columna nombre en DB si por alguna razón la migración no se ejecutó
     try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch (e) {}
     const { producto_terminado_id, componentes, nombre, tamano_id } = req.body;
+    const { costo, precio_venta } = req.body;
     // Verificar que el tamaño existe y pertenece al producto terminado
-    const t = await sql`SELECT * FROM tamanos WHERE id = ${tamano_id}`;
-    if (!t || t.length === 0) return res.status(400).json({ error: 'Tamaño (tamano_id) no encontrado' });
-    if (t[0].producto_id && Number(t[0].producto_id) !== Number(producto_terminado_id)) {
-      return res.status(400).json({ error: 'El tamaño no pertenece al producto_terminado_id indicado' });
-    }
+    // tamano_id legacy: aceptamos valor si se provee, pero la tabla `tamanos` puede no existir.
+    let tam = tamano_id ? tamano_id : null;
     await sql`BEGIN`;
     // Verificar que la fórmula exista
     const f = await sql`SELECT * FROM formulas WHERE id = ${formulaId} FOR NO KEY UPDATE`;
@@ -85,7 +86,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Fórmula no encontrada' });
     }
     // Actualizar producto_terminado_id
-  await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, tamano_id = ${tamano_id} WHERE id = ${formulaId}`;
+  await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, tamano_id = ${tam}, costo = ${costo}, precio_venta = ${precio_venta} WHERE id = ${formulaId}`;
     // Reemplazar componentes: eliminar existentes e insertar nuevos
     await sql`DELETE FROM formula_componentes WHERE formula_id = ${formulaId}`;
     for (const c of componentes) {
@@ -94,9 +95,8 @@ router.put('/:id', async (req, res) => {
     await sql`COMMIT`;
     const updated = await sql`SELECT * FROM formulas WHERE id = ${formulaId}`;
     updated[0].componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${formulaId}`;
-    // Adjuntar información del tamaño
-    const tam = await sql`SELECT id, nombre, cantidad, unidad, costo, precio_venta FROM tamanos WHERE id = ${updated[0].tamano_id}`;
-    updated[0].tamano = tam && tam[0] ? tam[0] : null;
+    // Adjuntar información de la propia fórmula como 'tamano' (compatibilidad)
+    updated[0].tamano = { id: updated[0].id, nombre: updated[0].nombre, cantidad: updated[0].cantidad || null, unidad: updated[0].unidad || null, costo: updated[0].costo, precio_venta: updated[0].precio_venta };
     res.json(updated[0]);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) {}
@@ -127,11 +127,10 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const formula = await sql`SELECT f.*, t.id AS tamano_id, t.nombre AS tamano_nombre, t.cantidad AS tamano_cantidad, t.unidad AS tamano_unidad, t.costo AS tamano_costo, t.precio_venta AS tamano_precio_venta FROM formulas f LEFT JOIN tamanos t ON t.id = f.tamano_id WHERE f.id = ${req.params.id}`;
+    const formula = await sql`SELECT f.* FROM formulas f WHERE f.id = ${req.params.id}`;
     if (formula.length === 0) return res.status(404).json({ error: 'No encontrado' });
     formula[0].componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${req.params.id}`;
-    formula[0].tamano = { id: formula[0].tamano_id, nombre: formula[0].tamano_nombre, cantidad: formula[0].tamano_cantidad, unidad: formula[0].tamano_unidad, costo: formula[0].tamano_costo, precio_venta: formula[0].tamano_precio_venta };
-    delete formula[0].tamano_id; delete formula[0].tamano_nombre; delete formula[0].tamano_cantidad; delete formula[0].tamano_unidad;
+    formula[0].tamano = { id: formula[0].id, nombre: formula[0].nombre, cantidad: formula[0].cantidad || null, unidad: formula[0].unidad || null, costo: formula[0].costo, precio_venta: formula[0].precio_venta };
     res.json(formula[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });

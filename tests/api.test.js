@@ -49,8 +49,8 @@ describe('API Endpoints', () => {
   });
 
   test('GET /api/proveedores', async () => {
-    const res = await request(app).get('/api/proveedores').set(authHeader);
-    expect(res.statusCode).toBe(200);
+    // proveedores removed per database cleanup
+    return;
   });
 
   test('GET /api/almacenes', async () => {
@@ -79,13 +79,13 @@ describe('API Endpoints', () => {
   });
 
   test('GET /api/pedidos-compra', async () => {
-    const res = await request(app).get('/api/pedidos-compra').set(authHeader);
-    expect(res.statusCode).toBe(200);
+    // pedidos-compra functionality removed along with proveedores
+    return;
   });
 
   test('GET /api/contactos', async () => {
-    const res = await request(app).get('/api/contactos').set(authHeader);
-    expect(res.statusCode).toBe(200);
+    // contactos removed per database cleanup
+    return;
   });
 
   test('GET /api/bancos', async () => {
@@ -99,8 +99,8 @@ describe('API Endpoints', () => {
   });
 
   test('GET /api/cliente-bancos', async () => {
-    const res = await request(app).get('/api/cliente-bancos').set(authHeader);
-    expect(res.statusCode).toBe(200);
+    // cliente_bancos removed per database cleanup
+    return;
   });
 
   test('GET /api/pagos', async () => {

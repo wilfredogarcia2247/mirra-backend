@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const PedidoCompraSchema = new mongoose.Schema({
-  proveedor: { type: mongoose.Schema.Types.ObjectId, ref: 'Proveedor' },
+  // proveedor removed: purchases no longer reference a Proveedor model
   productos: [{
     producto: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto' },
     cantidad: Number

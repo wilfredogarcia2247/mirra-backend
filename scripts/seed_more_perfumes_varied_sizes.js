@@ -11,7 +11,6 @@ async function seedMore() {
         nombre: 'Mini Sampler Pack - Citrus',
         categoria: 'Perfumes',
         marca: 'Aromas',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '5ml', cantidad: 5, unidad: 'ml', costo: 0.08, precio_venta: 3.5 },
           { nombre: '10ml', cantidad: 10, unidad: 'ml', costo: 0.15, precio_venta: 6.0 }
@@ -21,7 +20,6 @@ async function seedMore() {
         nombre: 'Body Mist - Floral Light',
         categoria: 'Perfumes',
         marca: 'Aromas',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 0.9, precio_venta: 18.0 },
           { nombre: '200ml', cantidad: 200, unidad: 'ml', costo: 1.6, precio_venta: 30.0 }
@@ -31,7 +29,6 @@ async function seedMore() {
         nombre: 'Eau de Parfum - Limited Edition',
         categoria: 'Perfumes',
         marca: 'Aromas',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.9, precio_venta: 18.0 },
           { nombre: '75ml', cantidad: 75, unidad: 'ml', costo: 2.0, precio_venta: 44.0 },
@@ -42,7 +39,6 @@ async function seedMore() {
         nombre: 'Gift Set - Floral Trio',
         categoria: 'Perfumes',
         marca: 'Aromas',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '3x10ml', cantidad: 10, unidad: 'ml', costo: 0.4, precio_venta: 20.0 } 
         ]
@@ -51,21 +47,18 @@ async function seedMore() {
         nombre: 'Roll-on Solid Perfume - Vanilla',
         categoria: 'Perfumes',
         marca: 'Aromas',
-        proveedor: 'Proveedor Aromas',
         tamanos: [
           { nombre: '8ml', cantidad: 8, unidad: 'ml', costo: 0.25, precio_venta: 7.0 }
         ]
       }
     ];
 
-    // Asegurar categorías/marcas/proveedores
+    // Asegurar categorías y marcas (proveedor eliminado)
     for (const it of items) {
       const cat = await sql`SELECT id FROM categorias WHERE nombre = ${it.categoria} LIMIT 1`;
       if (!cat || cat.length === 0) await sql`INSERT INTO categorias (nombre, descripcion) VALUES (${it.categoria}, ${it.categoria})`;
       const mar = await sql`SELECT id FROM marcas WHERE nombre = ${it.marca} LIMIT 1`;
       if (!mar || mar.length === 0) await sql`INSERT INTO marcas (nombre, descripcion) VALUES (${it.marca}, ${it.marca})`;
-      const prov = await sql`SELECT id FROM proveedores WHERE nombre = ${it.proveedor} LIMIT 1`;
-      if (!prov || prov.length === 0) await sql`INSERT INTO proveedores (nombre, telefono, email) VALUES (${it.proveedor}, '000000000', 'proveedor@demo')`;
     }
 
     // Alinear secuencia productos
@@ -80,12 +73,11 @@ async function seedMore() {
       } else {
         const catId = (await sql`SELECT id FROM categorias WHERE nombre = ${it.categoria} LIMIT 1`)[0].id;
         const marId = (await sql`SELECT id FROM marcas WHERE nombre = ${it.marca} LIMIT 1`)[0].id;
-        const provId = (await sql`SELECT id FROM proveedores WHERE nombre = ${it.proveedor} LIMIT 1`)[0].id;
         const res = await sql`
           WITH existing AS (SELECT id FROM productos WHERE nombre = ${it.nombre} LIMIT 1),
           ins AS (
-            INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, proveedor_id, categoria_id, marca_id)
-            SELECT ${it.nombre}, 'unidad', 0, 0, NULL, ${provId}, ${catId}, ${marId}
+            INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, categoria_id, marca_id)
+            SELECT ${it.nombre}, 'unidad', 0, 0, NULL, ${catId}, ${marId}
             WHERE NOT EXISTS (SELECT 1 FROM existing)
             RETURNING id
           )

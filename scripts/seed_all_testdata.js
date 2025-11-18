@@ -31,17 +31,7 @@ async function main() {
       }
     }
 
-    // Proveedores
-    const proveedores = [
-      { nombre: 'Proveedor Aromas', telefono: '123456789', email: 'proveedor@aromas.com' },
-      { nombre: 'Proveedor Envases', telefono: '987654321', email: 'envases@prov.com' }
-    ];
-    for (const p of proveedores) {
-      const exists = await sql`SELECT id FROM proveedores WHERE nombre = ${p.nombre} LIMIT 1`;
-      if (!exists || exists.length === 0) {
-        await sql`INSERT INTO proveedores (nombre, telefono, email) VALUES (${p.nombre}, ${p.telefono}, ${p.email})`;
-      }
-    }
+    // Proveedores removed: no se insertan proveedores
 
     // Bancos y formas de pago
     const bancos = ['Banco Demo'];
@@ -61,13 +51,13 @@ async function main() {
 
     // Productos: materias primas y productos terminados (idempotente)
     const productos = [
-      { id: 1, nombre: 'Esencia de Jazmín', unidad: 'ml', stock: 1000, costo: 0.5, proveedor_id: 1, categoria_nombre: 'Materia Prima' },
-      { id: 2, nombre: 'Alcohol de Perfumería', unidad: 'ml', stock: 5000, costo: 0.2, proveedor_id: 1, categoria_nombre: 'Materia Prima' },
-      { id: 3, nombre: 'Fijador', unidad: 'ml', stock: 2000, costo: 0.3, proveedor_id: 1, categoria_nombre: 'Materia Prima' },
-      { id: 4, nombre: 'Frasco de Vidrio 50ml', unidad: 'unidad', stock: 200, costo: 1.0, proveedor_id: 2, categoria_nombre: 'Envases', marca_nombre: 'FrascoCo' },
-      { id: 5, nombre: 'Tapa Atomizadora', unidad: 'unidad', stock: 200, costo: 0.5, proveedor_id: 2, categoria_nombre: 'Envases', marca_nombre: 'FrascoCo' },
-      { id: 6, nombre: 'Etiqueta Floral', unidad: 'unidad', stock: 200, costo: 0.1, proveedor_id: 2, categoria_nombre: 'Envases', marca_nombre: 'FrascoCo' },
-      { id: 7, nombre: 'Perfume Floral N°5', unidad: 'unidad', stock: 20, costo: 0, proveedor_id: 1, categoria_nombre: 'Perfumes', marca_nombre: 'Aromas' }
+      { id: 1, nombre: 'Esencia de Jazmín', unidad: 'ml', stock: 1000, costo: 0.5, categoria_nombre: 'Materia Prima' },
+      { id: 2, nombre: 'Alcohol de Perfumería', unidad: 'ml', stock: 5000, costo: 0.2, categoria_nombre: 'Materia Prima' },
+      { id: 3, nombre: 'Fijador', unidad: 'ml', stock: 2000, costo: 0.3, categoria_nombre: 'Materia Prima' },
+      { id: 4, nombre: 'Frasco de Vidrio 50ml', unidad: 'unidad', stock: 200, costo: 1.0, categoria_nombre: 'Envases', marca_nombre: 'FrascoCo' },
+      { id: 5, nombre: 'Tapa Atomizadora', unidad: 'unidad', stock: 200, costo: 0.5, categoria_nombre: 'Envases', marca_nombre: 'FrascoCo' },
+      { id: 6, nombre: 'Etiqueta Floral', unidad: 'unidad', stock: 200, costo: 0.1, categoria_nombre: 'Envases', marca_nombre: 'FrascoCo' },
+      { id: 7, nombre: 'Perfume Floral N°5', unidad: 'unidad', stock: 20, costo: 0, categoria_nombre: 'Perfumes', marca_nombre: 'Aromas' }
     ];
     for (const p of productos) {
       const exists = await sql`SELECT id FROM productos WHERE id = ${p.id} LIMIT 1`;
@@ -75,8 +65,8 @@ async function main() {
       // obtener category id y marca id si existen
       const cat = await sql`SELECT id FROM categorias WHERE nombre = ${p.categoria_nombre} LIMIT 1`;
       const mar = p.marca_nombre ? await sql`SELECT id FROM marcas WHERE nombre = ${p.marca_nombre} LIMIT 1` : [];
-      await sql`INSERT INTO productos (id, nombre, unidad, stock, costo, proveedor_id, categoria_id, marca_id, image_url)
-        VALUES (${p.id}, ${p.nombre}, ${p.unidad}, ${p.stock}, ${p.costo}, ${p.proveedor_id}, ${cat && cat[0] ? cat[0].id : null}, ${mar && mar[0] ? mar[0].id : null}, NULL)`;
+      await sql`INSERT INTO productos (id, nombre, unidad, stock, costo, categoria_id, marca_id, image_url)
+        VALUES (${p.id}, ${p.nombre}, ${p.unidad}, ${p.stock}, ${p.costo}, ${cat && cat[0] ? cat[0].id : null}, ${mar && mar[0] ? mar[0].id : null}, NULL)`;
     }
 
     // Almacenes (idempotente)
@@ -167,19 +157,11 @@ async function main() {
         VALUES (7, ${t.id}, ${'SKU-7-' + t.id}, 0, 0, 3.0, 0, 1.0, ${demoPrice})`;
     }
 
-    // Contactos/Clientes
-    const contacto = await sql`SELECT id FROM contactos WHERE email = 'cliente@demo.com' LIMIT 1`;
-    if (!contacto || contacto.length === 0) {
-      await sql`INSERT INTO contactos (nombre, tipo, telefono, email, banco, cuenta_bancaria, formas_pago) VALUES ('Cliente Demo','Cliente','555000111','cliente@demo.com','Banco Demo','00012345678','Tarjeta,Transferencia')`;
-    }
-
-    // Pedidos de venta demo (asociar al contacto si existe)
-    const cliente = (await sql`SELECT id FROM contactos WHERE email = 'cliente@demo.com' LIMIT 1`)[0];
-    if (cliente) {
-      const pedido = await sql`SELECT id FROM pedidos_venta WHERE cliente_id = ${cliente.id} LIMIT 1`;
-      if (!pedido || pedido.length === 0) {
-        await sql`INSERT INTO pedidos_venta (cliente_id, estado, fecha, nombre_cliente) VALUES (${cliente.id}, 'pendiente', NOW(), 'Cliente Demo')`;
-      }
+    // Contactos/Clientes removed from seeds (table not present)
+    // Crear un pedido de venta demo sin cliente asociado para compatibilidad de pruebas
+    const pedidoExists = await sql`SELECT id FROM pedidos_venta LIMIT 1`;
+    if (!pedidoExists || pedidoExists.length === 0) {
+      await sql`INSERT INTO pedidos_venta (cliente_id, estado, fecha, nombre_cliente) VALUES (NULL, 'pendiente', NOW(), 'Cliente Demo')`;
     }
 
     console.log('Seed completo.');

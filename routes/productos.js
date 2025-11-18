@@ -75,7 +75,7 @@ router.post('/', async (req, res) => {
     const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPost;
+    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id } = payloadPost;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
       const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
@@ -86,8 +86,8 @@ router.post('/', async (req, res) => {
       if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
     }
     const result = await sql`
-      INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id)
-      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${proveedor_id || null}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
+      INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id)
+      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
       RETURNING *
     `;
     res.status(201).json(result[0]);
@@ -153,7 +153,7 @@ router.put('/:id', async (req, res) => {
   try {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const { nombre, unidad, stock, costo, precio_venta, proveedor_id, image_url, categoria_id, marca_id } = payloadPut;
+    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id } = payloadPut;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
       const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
@@ -166,7 +166,7 @@ router.put('/:id', async (req, res) => {
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, proveedor_id=${proveedor_id}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}
+      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
@@ -190,8 +190,16 @@ router.delete('/:id', async (req, res) => {
     const pv = await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE producto_id = ${prodId}`;
     if (pv && pv[0] && Number(pv[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de venta' });
     // 3) Verificar que el producto no esté en pedidos de compra
-    const pc = await sql`SELECT COUNT(*)::int AS c FROM pedido_compra_productos WHERE producto_id = ${prodId}`;
-    if (pc && pc[0] && Number(pc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de compra' });
+    // Revisar si la tabla de pedidos de compra existe antes de consultar
+    try {
+      const pc_tbl = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'pedido_compra_productos' LIMIT 1`;
+      if (pc_tbl && pc_tbl.length > 0) {
+        const pc = await sql`SELECT COUNT(*)::int AS c FROM pedido_compra_productos WHERE producto_id = ${prodId}`;
+        if (pc && pc[0] && Number(pc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de compra' });
+      }
+    } catch (e) {
+      // si la tabla no existe o hay error, no bloqueamos la eliminación por pedidos de compra
+    }
     // 4) Verificar que no sea materia prima en una fórmula
     const fc = await sql`SELECT COUNT(*)::int AS c FROM formula_componentes WHERE materia_prima_id = ${prodId}`;
     if (fc && fc[0] && Number(fc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: se usa como materia prima en una fórmula' });

@@ -77,17 +77,13 @@ app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 
 // Rutas protegidas
 app.use('/api/productos', authMiddleware, require('./routes/productos'));
-app.use('/api/proveedores', authMiddleware, require('./routes/proveedores'));
 app.use('/api/almacenes', authMiddleware, require('./routes/almacenes'));
 app.use('/api/formulas', authMiddleware, require('./routes/formulas'));
 app.use('/api/ordenes-produccion', authMiddleware, require('./routes/ordenesProduccion'));
 app.use('/api/inventario', authMiddleware, require('./routes/inventario'));
 app.use('/api/pedidos-venta', authMiddleware, require('./routes/pedidosVenta'));
-app.use('/api/pedidos-compra', authMiddleware, require('./routes/pedidosCompra'));
-app.use('/api/contactos', authMiddleware, require('./routes/contactos'));
 app.use('/api/bancos', authMiddleware, require('./routes/bancos'));
 app.use('/api/formas-pago', authMiddleware, require('./routes/formasPago'));
-app.use('/api/cliente-bancos', authMiddleware, require('./routes/clienteBancos'));
 app.use('/api/pagos', authMiddleware, require('./routes/pagos'));
 // Precios calculados por el motor de reglas
 app.use('/api/precios', authMiddleware, require('./routes/precios'));

@@ -57,15 +57,14 @@ Aromas/
   - Autenticación: `POST /api/auth/login`, `POST /api/auth/register`
   - Productos: `GET/POST /api/productos`
    - Catálogo público de productos: `GET /api/productos/catalogo` (no requiere token)
-  - Proveedores: `GET /api/proveedores`
   - Almacenes: `GET /api/almacenes`
   - Fórmulas: `GET /api/formulas`
   - Inventario: `GET /api/inventario`
-  - Pedidos: `GET /api/pedidos-venta`, `GET /api/pedidos-compra`
-  - Contactos: `GET /api/contactos`
+   - Pedidos: `GET /api/pedidos-venta`
   - Bancos: `GET /api/bancos`
   - Formas de pago: `GET /api/formas-pago`
-  - Cliente-bancos: `GET /api/cliente-bancos`
+   - (Contactos removed)
+   - (Cliente-bancos removed)
   - Pagos: `GET /api/pagos`
 
 ## Autenticación y Roles

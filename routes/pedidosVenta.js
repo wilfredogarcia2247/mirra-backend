@@ -44,13 +44,14 @@ router.get('/', async (req, res) => {
     const pedidosConDetalle = [];
     for (const p of pedidos) {
       const productos = await sql`
-        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
-               COALESCE(pv.tamano_nombre, tam.nombre) AS tamano_nombre,
-               prod.nombre AS producto_nombre, prod.precio_venta, prod.costo, prod.image_url
-        FROM pedido_venta_productos pv
-        LEFT JOIN productos prod ON prod.id = pv.producto_id
-        LEFT JOIN tamanos tam ON tam.id = pv.tamano_id
-        WHERE pv.pedido_venta_id = ${p.id}
+         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
+           COALESCE(pv.tamano_nombre, f.nombre) AS tamano_nombre,
+           prod.nombre AS producto_nombre, prod.precio_venta, prod.costo, prod.image_url,
+           f.costo AS tamano_costo, f.precio_venta AS tamano_precio_venta
+         FROM pedido_venta_productos pv
+         LEFT JOIN productos prod ON prod.id = pv.producto_id
+         LEFT JOIN formulas f ON f.id = pv.tamano_id
+         WHERE pv.pedido_venta_id = ${p.id}
       `;
       // Normalizar tipos y calcular subtotales
       let total = 0;
@@ -113,7 +114,8 @@ router.post('/', async (req, res) => {
         let costoUnitario = null;
         let nombreProducto = null;
         if (p.tamano_id != null) {
-          const tamRow = await sql`SELECT precio_venta, costo, nombre FROM tamanos WHERE id = ${p.tamano_id}`;
+          // Intentar obtener snapshot desde formulas (ahora representan tamaños)
+          const tamRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.tamano_id}`;
           if (tamRow && tamRow[0]) {
             precioUnitario = tamRow[0].precio_venta != null ? tamRow[0].precio_venta : null;
             costoUnitario = tamRow[0].costo != null ? tamRow[0].costo : null;
@@ -139,16 +141,17 @@ router.post('/', async (req, res) => {
 
       // Recuperar y devolver pedido con detalle
       const productosDetalle = await sql`
-        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
-               COALESCE(pv.tamano_nombre, tam.nombre) AS tamano_nombre,
-               COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-               COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-               COALESCE(pv.costo_unitario, prod.costo) AS costo,
-               prod.image_url
-        FROM pedido_venta_productos pv
-        LEFT JOIN productos prod ON prod.id = pv.producto_id
-        LEFT JOIN tamanos tam ON tam.id = pv.tamano_id
-        WHERE pv.pedido_venta_id = ${pedido[0].id}
+         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
+           COALESCE(pv.tamano_nombre, f.nombre) AS tamano_nombre,
+           COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+           COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+           COALESCE(pv.costo_unitario, prod.costo) AS costo,
+           prod.image_url,
+           f.costo AS tamano_costo, f.precio_venta AS tamano_precio_venta
+         FROM pedido_venta_productos pv
+         LEFT JOIN productos prod ON prod.id = pv.producto_id
+         LEFT JOIN formulas f ON f.id = pv.tamano_id
+         WHERE pv.pedido_venta_id = ${pedido[0].id}
       `;
       let total = 0;
       const productosMapeados = productosDetalle.map(item => {

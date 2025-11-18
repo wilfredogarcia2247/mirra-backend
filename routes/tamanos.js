@@ -17,13 +17,14 @@ function validarTamano(body) {
 router.get('/', async (req, res) => {
   try {
     const productoId = req.query.producto_id ? Number(req.query.producto_id) : null;
+    // Compatibilidad: la tabla `tamanos` fue eliminada; tratamos `formulas` como los tamaños asociados a un producto terminado
     let rows;
     if (productoId) {
-      rows = await sql`SELECT * FROM tamanos WHERE producto_id = ${productoId} ORDER BY nombre`;
+      rows = await sql`SELECT f.id, f.producto_terminado_id AS producto_id, f.nombre, f.costo, f.precio_venta FROM formulas f WHERE f.producto_terminado_id = ${productoId} ORDER BY f.nombre`;
     } else {
-      rows = await sql`SELECT * FROM tamanos ORDER BY producto_id, nombre`;
+      rows = await sql`SELECT f.id, f.producto_terminado_id AS producto_id, f.nombre, f.costo, f.precio_venta FROM formulas f ORDER BY f.producto_terminado_id, f.nombre`;
     }
-    const tamanos = (rows || []).map(t => ({ ...t, cantidad: t.cantidad != null ? Number(t.cantidad) : null, costo: t.costo != null ? Number(t.costo) : null, precio_venta: t.precio_venta != null ? Number(t.precio_venta) : null, factor_multiplicador_venta: t.factor_multiplicador_venta != null ? Number(t.factor_multiplicador_venta) : null }));
+    const tamanos = (rows || []).map(t => ({ id: t.id, producto_id: t.producto_id, nombre: t.nombre, cantidad: t.cantidad != null ? Number(t.cantidad) : null, unidad: t.unidad || null, costo: t.costo != null ? Number(t.costo) : null, precio_venta: t.precio_venta != null ? Number(t.precio_venta) : null }));
     res.json(tamanos);
   } catch (err) {
     console.error('Error GET /api/tamanos:', err);
@@ -34,10 +35,11 @@ router.get('/', async (req, res) => {
 // GET /api/tamanos/:id
 router.get('/:id', async (req, res) => {
   try {
-    const rows = await sql`SELECT * FROM tamanos WHERE id = ${req.params.id}`;
+    // Devolver fórmula correspondiente como tamaño
+    const rows = await sql`SELECT f.id, f.producto_terminado_id AS producto_id, f.nombre, f.costo, f.precio_venta, f.cantidad, f.unidad FROM formulas f WHERE f.id = ${req.params.id}`;
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const t = rows[0];
-    res.json({ ...t, cantidad: t.cantidad != null ? Number(t.cantidad) : null, costo: t.costo != null ? Number(t.costo) : null, precio_venta: t.precio_venta != null ? Number(t.precio_venta) : null, factor_multiplicador_venta: t.factor_multiplicador_venta != null ? Number(t.factor_multiplicador_venta) : null });
+    res.json({ id: t.id, producto_id: t.producto_id, nombre: t.nombre, cantidad: t.cantidad != null ? Number(t.cantidad) : null, unidad: t.unidad || null, costo: t.costo != null ? Number(t.costo) : null, precio_venta: t.precio_venta != null ? Number(t.precio_venta) : null });
   } catch (err) {
     console.error('Error GET /api/tamanos/:id:', err);
     res.status(500).json({ error: err.message });
@@ -49,16 +51,12 @@ router.post('/', async (req, res) => {
   const error = validarTamano(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, cantidad, unidad, producto_id, costo, precio_venta, factor_multiplicador_venta } = req.body;
-    // Verificar producto
+    // Crear una fórmula que represente este tamaño (compatibilidad)
+    const { nombre, cantidad, unidad, producto_id, costo, precio_venta } = req.body;
     const prod = await sql`SELECT id FROM productos WHERE id = ${producto_id}`;
     if (!prod || prod.length === 0) return res.status(400).json({ error: 'producto_id no existe' });
-    const created = await sql`
-      INSERT INTO tamanos (nombre, cantidad, unidad, producto_id, costo, precio_venta, factor_multiplicador_venta)
-      VALUES (${nombre}, ${cantidad || null}, ${unidad || null}, ${producto_id}, ${costo || null}, ${precio_venta || null}, ${factor_multiplicador_venta || null})
-      RETURNING *
-    `;
-    res.status(201).json(created[0]);
+    const created = await sql`INSERT INTO formulas (producto_terminado_id, nombre, costo, precio_venta) VALUES (${producto_id}, ${nombre}, ${costo || null}, ${precio_venta || null}) RETURNING *`;
+    res.status(201).json({ id: created[0].id, producto_id, nombre: created[0].nombre, costo: created[0].costo, precio_venta: created[0].precio_venta });
   } catch (err) {
     console.error('Error creando tamaño:', err);
     // Manejo simple de violación de unicidad por producto+nombre
@@ -72,17 +70,15 @@ router.put('/:id', async (req, res) => {
   const error = validarTamano({ ...req.body, producto_id: req.body.producto_id ?? req.body.producto });
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, cantidad, unidad, producto_id, costo, precio_venta, factor_multiplicador_venta } = req.body;
+    // Actualizar la fórmula asociada (compatibilidad)
+    const { nombre, cantidad, unidad, producto_id, costo, precio_venta } = req.body;
     if (producto_id != null) {
       const prod = await sql`SELECT id FROM productos WHERE id = ${producto_id}`;
       if (!prod || prod.length === 0) return res.status(400).json({ error: 'producto_id no existe' });
     }
-    const result = await sql`
-      UPDATE tamanos SET nombre=${nombre}, cantidad=${cantidad}, unidad=${unidad}, producto_id=${producto_id}, costo=${costo}, precio_venta=${precio_venta}, factor_multiplicador_venta=${factor_multiplicador_venta}
-      WHERE id = ${req.params.id} RETURNING *
-    `;
+    const result = await sql`UPDATE formulas SET nombre = ${nombre}, costo = ${costo}, precio_venta = ${precio_venta} WHERE id = ${req.params.id} RETURNING *`;
     if (!result || result.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    res.json(result[0]);
+    res.json({ id: result[0].id, producto_id: result[0].producto_terminado_id, nombre: result[0].nombre, costo: result[0].costo, precio_venta: result[0].precio_venta });
   } catch (err) {
     console.error('Error actualizando tamaño:', err);
     if (err && err.code === '23505') return res.status(400).json({ error: 'Ya existe un tamaño con ese nombre para este producto' });
@@ -95,15 +91,12 @@ router.delete('/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-    // Verificar referencias en formulas y precio_productos
-    const f = await sql`SELECT COUNT(*)::int AS c FROM formulas WHERE tamano_id = ${id}`;
-    if (f && f[0] && Number(f[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar: tamaño referenciado en formulas' });
-    const p = await sql`SELECT COUNT(*)::int AS c FROM precio_productos WHERE tamano_id = ${id}`;
-    if (p && p[0] && Number(p[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar: existe precio calculado para este tamaño' });
-
-    const del = await sql`DELETE FROM tamanos WHERE id = ${id} RETURNING *`;
+    // Como `tamanos` fue eliminado, borramos la fórmula que representa este tamaño si no tiene ordenes de producción
+    const ops = await sql`SELECT COUNT(*)::int AS c FROM ordenes_produccion WHERE formula_id = ${id}`;
+    if (ops && ops[0] && Number(ops[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar: existen órdenes de producción asociadas' });
+    const del = await sql`DELETE FROM formulas WHERE id = ${id} RETURNING *`;
     if (!del || del.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    res.json({ eliminado: true, tamanos: del[0] });
+    res.json({ eliminado: true, tamanos: { id: del[0].id, nombre: del[0].nombre, producto_id: del[0].producto_terminado_id } });
   } catch (err) {
     console.error('Error eliminando tamaño:', err);
     res.status(500).json({ error: err.message });

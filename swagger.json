@@ -61,15 +61,7 @@
       "put": { "summary": "Actualizar producto", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Producto" } } } }, "responses": { "200": { "description": "Producto actualizado" }, "404": { "description": "No encontrado" } } },
       "delete": { "summary": "Eliminar producto", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Producto eliminado" }, "404": { "description": "No encontrado" } } }
     },
-    "/proveedores": {
-      "get": { "summary": "Listar proveedores", "responses": { "200": { "description": "Lista de proveedores" } } },
-      "post": { "summary": "Crear proveedor", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Proveedor" } } } }, "responses": { "201": { "description": "Proveedor creado" } } }
-    },
-    "/proveedores/{id}": {
-      "get": { "summary": "Obtener proveedor por ID", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Proveedor" }, "404": { "description": "No encontrado" } } },
-      "put": { "summary": "Actualizar proveedor", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Proveedor" } } } }, "responses": { "200": { "description": "Proveedor actualizado" }, "404": { "description": "No encontrado" } } },
-      "delete": { "summary": "Eliminar proveedor", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Proveedor eliminado" }, "404": { "description": "No encontrado" } } }
-    },
+    
     "/bancos": {
       "get": { "summary": "Listar bancos", "responses": { "200": { "description": "Lista de bancos" } } },
       "post": { "summary": "Crear banco", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Banco" } } } }, "responses": { "201": { "description": "Banco creado" } } }
@@ -122,19 +114,11 @@
           "unidad": { "type": "string" },
           "stock": { "type": "integer" },
           "costo": { "type": "number" },
-          "precio_venta": { "type": "number" },
-          "proveedor_id": { "type": "integer" }
+          "precio_venta": { "type": "number" }
         },
         "required": ["nombre"]
       },
-      "Proveedor": {
-        "type": "object",
-        "properties": {
-          "nombre": { "type": "string" },
-          "telefono": { "type": "string" },
-          "email": { "type": "string" }
-        }
-      },
+      
       "Banco": {
         "type": "object",
         "properties": {

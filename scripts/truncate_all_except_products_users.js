@@ -18,10 +18,10 @@ async function main() {
       'pedido_compra_productos', 'pedidos_compra',
       'inventario_movimientos', 'ordenes_produccion',
       'pagos', 'tasas_cambio',
-      'bancos', 'cliente_bancos',
-      'proveedores', 'almacenes',
+      'bancos',
+      'almacenes',
       'formulas', 'formula_componentes',
-      'contactos', 'formas_pago',
+      'formas_pago',
       'inventario'
     ];
 

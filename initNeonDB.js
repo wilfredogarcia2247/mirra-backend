@@ -23,21 +23,14 @@ async function initDB() {
       ('Empleado', 'empleado@aromas.com', '$2a$10$empleadohash', 'empleado')
       ON CONFLICT (email) DO NOTHING;`;
   // ALTER TABLE para agregar columnas si no existen
-  try { await sql`ALTER TABLE contactos ADD COLUMN banco VARCHAR(100);`; } catch(e) {}
-  try { await sql`ALTER TABLE contactos ADD COLUMN cuenta_bancaria VARCHAR(50);`; } catch(e) {}
-  try { await sql`ALTER TABLE contactos ADD COLUMN formas_pago VARCHAR(100);`; } catch(e) {}
+  // contactos table removed in this installation; no ALTERs applied
     await sql`CREATE TABLE IF NOT EXISTS bancos (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100)
     );`;
   // Asegurar columna para moneda en bancos
   try { await sql`ALTER TABLE bancos ADD COLUMN moneda VARCHAR(10);`; } catch(e) {}
-    await sql`CREATE TABLE IF NOT EXISTS cliente_bancos (
-      id SERIAL PRIMARY KEY,
-      cliente_id INT,
-      banco_id INT,
-      cuenta_bancaria VARCHAR(50)
-    );`;
+    // cliente_bancos table removed - not created here
     await sql`CREATE TABLE IF NOT EXISTS pagos (
       id SERIAL PRIMARY KEY,
       pedido_venta_id INT,
@@ -56,26 +49,16 @@ async function initDB() {
       ('Banco Uno'),
       ('Banco Dos')
       ON CONFLICT DO NOTHING;`;
-    await sql`INSERT INTO cliente_bancos (cliente_id, banco_id, cuenta_bancaria) VALUES
-      (1, 1, '1234567890'),
-      (2, 2, '0987654321')
-      ON CONFLICT DO NOTHING;`;
+    // cliente_bancos table removed in this installation: no seed inserted
   try {
     // Crear tablas (una por una)
-    await sql`CREATE TABLE IF NOT EXISTS proveedores (
-      id SERIAL PRIMARY KEY,
-      nombre VARCHAR(100),
-      telefono VARCHAR(30),
-      email VARCHAR(100)
-    );`;
     await sql`CREATE TABLE IF NOT EXISTS productos (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
       unidad VARCHAR(20),
       stock INT,
       costo NUMERIC,
-      precio_venta NUMERIC,
-      proveedor_id INT
+      precio_venta NUMERIC
     );`;
     // Crear tablas de categorías y marcas y relacionarlas con productos
     await sql`CREATE TABLE IF NOT EXISTS categorias (
@@ -134,11 +117,12 @@ async function initDB() {
       id SERIAL PRIMARY KEY,
       producto_terminado_id INT
     );`;
-    // Asegurar columna tamano_id en formulas para que la fórmula sea específica a un tamaño
+    // Asegurar columnas en formulas: tamano_id (legacy), nombre (descripción del tamaño), costo y precio_venta
     try { await sql`ALTER TABLE formulas ADD COLUMN tamano_id INT`; } catch(e) {}
     try { await sql`ALTER TABLE formulas ADD CONSTRAINT fk_formulas_tamano FOREIGN KEY (tamano_id) REFERENCES tamanos(id) ON DELETE SET NULL`; } catch(e) {}
-    // Asegurar columna nombre en formulas (migración segura)
     try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch(e) {}
+    try { await sql`ALTER TABLE formulas ADD COLUMN costo NUMERIC;`; } catch(e) {}
+    try { await sql`ALTER TABLE formulas ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS formula_componentes (
       id SERIAL PRIMARY KEY,
       formula_id INT,
@@ -210,16 +194,7 @@ async function initDB() {
       referencia TEXT,
       creado_en TIMESTAMP DEFAULT NOW()
     );`;
-    await sql`CREATE TABLE IF NOT EXISTS contactos (
-      id SERIAL PRIMARY KEY,
-      nombre VARCHAR(100),
-      tipo VARCHAR(30),
-      telefono VARCHAR(30),
-      email VARCHAR(100),
-      banco VARCHAR(100),
-      cuenta_bancaria VARCHAR(50),
-      formas_pago VARCHAR(100)
-    );`;
+    // contactos table removed - not created here
     await sql`CREATE TABLE IF NOT EXISTS formas_pago (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(50)
@@ -254,32 +229,14 @@ async function initDB() {
     try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
   try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
   try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
-    await sql`CREATE TABLE IF NOT EXISTS pedidos_compra (
-      id SERIAL PRIMARY KEY,
-      proveedor_id INT,
-      estado VARCHAR(30),
-      fecha TIMESTAMP
-    );`;
-    await sql`CREATE TABLE IF NOT EXISTS pedido_compra_productos (
-      id SERIAL PRIMARY KEY,
-      pedido_compra_id INT,
-      producto_id INT,
-      cantidad INT
-    );`;
-
-    // Semillas y datos falsos (una por una)
-    await sql`INSERT INTO proveedores (nombre, telefono, email) VALUES
-      ('Proveedor Aromas', '123456789', 'aromas@proveedor.com'),
-      ('Proveedor Frascos', '987654321', 'frascos@proveedor.com')
-      ON CONFLICT DO NOTHING;`;
-
-    await sql`INSERT INTO productos (nombre, unidad, stock, costo, proveedor_id) VALUES
-      ('Esencia de Jazmín', 'ml', 1000, 0.5, 1),
-      ('Alcohol de Perfumería', 'ml', 5000, 0.2, 1),
-      ('Fijador', 'ml', 2000, 0.3, 1),
-      ('Frasco de Vidrio 50ml', 'unidad', 200, 1.0, 2),
-      ('Tapa Atomizadora', 'unidad', 200, 0.5, 2),
-      ('Etiqueta "Floral N°5"', 'unidad', 200, 0.1, 2)
+    // Semillas básicas para productos (sin proveedor)
+    await sql`INSERT INTO productos (nombre, unidad, stock, costo) VALUES
+      ('Esencia de Jazmín', 'ml', 1000, 0.5),
+      ('Alcohol de Perfumería', 'ml', 5000, 0.2),
+      ('Fijador', 'ml', 2000, 0.3),
+      ('Frasco de Vidrio 50ml', 'unidad', 200, 1.0),
+      ('Tapa Atomizadora', 'unidad', 200, 0.5),
+      ('Etiqueta "Floral N°5"', 'unidad', 200, 0.1)
       ON CONFLICT DO NOTHING;`;
 
     await sql`INSERT INTO productos (nombre, unidad, stock, precio_venta) VALUES
@@ -318,10 +275,7 @@ async function initDB() {
       (1, 6, 1, 'unidad')
       ON CONFLICT DO NOTHING;`;
 
-    await sql`INSERT INTO contactos (nombre, tipo, telefono, email, banco, cuenta_bancaria, formas_pago) VALUES
-      ('Cliente Uno', 'Cliente', '555111222', 'cliente1@aromas.com', 'Banco Uno', '1234567890', 'Tarjeta,Transferencia'),
-      ('Cliente Dos', 'Cliente', '555333444', 'cliente2@aromas.com', 'Banco Dos', '0987654321', 'Efectivo,Transferencia')
-      ON CONFLICT DO NOTHING;`;
+    // No initial contactos inserted (table removed)
     await sql`INSERT INTO formas_pago (nombre) VALUES
       ('Tarjeta'),
       ('Transferencia'),

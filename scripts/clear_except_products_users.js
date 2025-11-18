@@ -14,19 +14,21 @@ async function main() {
   try {
     await sql`BEGIN`;
 
-    // Truncar tablas relacionadas a pedidos, compras, produccion, movimientos y tasas
-    await sql`
-      TRUNCATE TABLE
-        pedido_venta_productos,
-        pedidos_venta,
-        pedido_compra_productos,
-        pedidos_compra,
-        inventario_movimientos,
-        ordenes_produccion,
-        pagos,
-        tasas_cambio
-      RESTART IDENTITY CASCADE;
+    // Truncar sólo las tablas que existan en esta instalación (evita fallos si algunas tablas fueron eliminadas)
+    const candidateTables = [
+      'pedido_venta_productos', 'pedidos_venta',
+      'pedido_compra_productos', 'pedidos_compra',
+      'inventario_movimientos', 'ordenes_produccion', 'pagos', 'tasas_cambio'
+    ];
+    const existing = await sql`
+      SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY(${candidateTables});
     `;
+    const names = (existing || []).map(r => r.table_name).filter(Boolean);
+    if (names.length > 0) {
+      // Construir dinámicamente la sentencia TRUNCATE para las tablas existentes
+      const q = names.map(n => '"' + n + '"').join(', ');
+      await sql.raw(`TRUNCATE TABLE ${q} RESTART IDENTITY CASCADE`);
+    }
 
     // Dejar inventario pero resetear cantidades a 0 (conserva filas de inventario por almacen/producto)
     await sql`UPDATE inventario SET stock_fisico = 0, stock_comprometido = 0;`;
@@ -54,7 +56,7 @@ async function main() {
       }
     }
 
-    // Opcional: dejar formulas, proveedores, almacenes, productos y usuarios intactos
+    // Opcional: dejar formulas, almacenes, productos y usuarios intactos
 
     await sql`COMMIT`;
     console.log('Vaciado selectivo completado. Tablas truncadas y inventario reseteado.');
