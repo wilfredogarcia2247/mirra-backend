@@ -49,6 +49,53 @@ async function seed() {
       }
     ];
 
+    // Añadir más perfumes de ejemplo
+    const extraPerfumes = [
+      {
+        nombre: 'Aqua Marine Essence',
+        marca: 'Aromas',
+        categoria: 'Perfumes',
+        proveedor: 'Proveedor Aromas',
+        tamanos: [
+          { nombre: '15ml', cantidad: 15, unidad: 'ml', costo: 0.25, precio_venta: 8.0 },
+          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.45, precio_venta: 15.0 },
+          { nombre: '75ml', cantidad: 75, unidad: 'ml', costo: 1.0, precio_venta: 32.0 }
+        ]
+      },
+      {
+        nombre: 'Woody Musk',
+        marca: 'Aromas',
+        categoria: 'Perfumes',
+        proveedor: 'Proveedor Aromas',
+        tamanos: [
+          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.6, precio_venta: 14.0 },
+          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.0, precio_venta: 25.0 }
+        ]
+      },
+      {
+        nombre: 'Vanilla Bloom',
+        marca: 'Aromas',
+        categoria: 'Perfumes',
+        proveedor: 'Proveedor Aromas',
+        tamanos: [
+          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.5, precio_venta: 13.0 },
+          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 2.0, precio_venta: 50.0 }
+        ]
+      },
+      {
+        nombre: 'Citrus Oud',
+        marca: 'Aromas',
+        categoria: 'Perfumes',
+        proveedor: 'Proveedor Aromas',
+        tamanos: [
+          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.2, precio_venta: 28.0 },
+          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 2.4, precio_venta: 55.0 }
+        ]
+      }
+    ];
+
+    perfumes.push(...extraPerfumes);
+
     // Asegurar marca y categoria y proveedor existen
     for (const p of perfumes) {
       const cat = await sql`SELECT id FROM categorias WHERE nombre = ${p.categoria} LIMIT 1`;
