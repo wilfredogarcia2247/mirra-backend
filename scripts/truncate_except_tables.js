@@ -16,19 +16,9 @@ async function main() {
   const excludeList = excludeEnv.split(',').map(s => s.trim()).filter(Boolean).map(s => s.toLowerCase());
 
   try {
-    await sql`
-      DO $$
-      DECLARE r RECORD;
-      BEGIN
-        FOR r IN SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type='BASE TABLE' LOOP
-          IF lower(r.table_name) = ANY(${excludeList}) THEN
-            -- skip
-          ELSE
-            EXECUTE format('TRUNCATE TABLE "%I" RESTART IDENTITY CASCADE', r.table_name);
-          END IF;
-        END LOOP;
-      END$$;
-    `;
+    const excludeLiterals = excludeList.map(s => `'${s}'`).join(',');
+    const program = `DO $$\n      DECLARE r RECORD;\n      BEGIN\n        FOR r IN SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type='BASE TABLE' LOOP\n          IF lower(r.table_name) IN (${excludeLiterals}) THEN\n            -- skip\n          ELSE\n            EXECUTE format('TRUNCATE TABLE "%I" RESTART IDENTITY CASCADE', r.table_name);\n          END IF;\n        END LOOP;\n      END$$;`;
+    await sql.query(program);
 
     console.log('Truncado completado. Tablas excluidas:', excludeList.join(', '));
     process.exit(0);

@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
           SELECT DISTINCT p.id FROM productos p
           JOIN inventario i ON i.producto_id = p.id
           JOIN almacenes a ON a.id = i.almacen_id
-          WHERE a.es_materia_prima IS NOT TRUE AND p.nombre ILIKE ${patternClause} AND (i.stock_fisico - i.stock_comprometido) > 0
+          WHERE a.es_materia_prima IS NOT TRUE AND p.nombre ILIKE ${patternClause}
           ${lim ? sql`LIMIT ${lim}` : sql``}
         `;
       }
@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
           SELECT DISTINCT p.id FROM productos p
           JOIN inventario i ON i.producto_id = p.id
           JOIN almacenes a ON a.id = i.almacen_id
-          WHERE a.es_materia_prima IS NOT TRUE AND (i.stock_fisico - i.stock_comprometido) > 0
+          WHERE a.es_materia_prima IS NOT TRUE
           ${lim ? sql`LIMIT ${lim}` : sql``}
         `;
       }
