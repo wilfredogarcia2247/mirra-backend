@@ -118,6 +118,10 @@ router.get('/', async (req, res) => {
       const key = `${t.producto_id}:${t.id}`;
       const pr = precioMap[key];
       entry.precio_calculado = pr ? Number(pr.precio_venta_final) : null;
+      // costo_pedido: costo que se debe usar al crear un pedido (snapshot). Preferir costo calculado en precio_productos
+      if (pr && pr.costo_total_fabricacion != null) entry.costo_pedido = Number(pr.costo_total_fabricacion);
+      else if (t.costo != null) entry.costo_pedido = Number(t.costo);
+      else entry.costo_pedido = null;
       if (!tamanosPorProducto[t.producto_id]) tamanosPorProducto[t.producto_id] = [];
       tamanosPorProducto[t.producto_id].push(entry);
     });
