@@ -90,6 +90,25 @@ async function initDB() {
       descripcion TEXT,
       creado_en TIMESTAMP DEFAULT NOW()
     );`;
+    // Tabla de tamaños para asociar versiones/formatos de un producto (ej: 50ml, 100ml, 1kg)
+    await sql`CREATE TABLE IF NOT EXISTS tamanos (
+      id SERIAL PRIMARY KEY,
+      nombre VARCHAR(100) UNIQUE,
+      cantidad NUMERIC,
+      unidad VARCHAR(20),
+      creado_en TIMESTAMP DEFAULT NOW()
+    );`;
+    // Remover restricción única global sobre nombre si existe (queremos unicidad por producto_id+nombre)
+    try { await sql`ALTER TABLE tamanos DROP CONSTRAINT IF EXISTS tamanos_nombre_key`; } catch(e) {}
+    // Asegurar columna producto_id en tamanos para enlazar tamaños con productos
+    try { await sql`ALTER TABLE tamanos ADD COLUMN producto_id INT`; } catch(e) {}
+    try { await sql`ALTER TABLE tamanos ADD CONSTRAINT fk_tamanos_producto FOREIGN KEY (producto_id) REFERENCES productos(id) ON DELETE CASCADE`; } catch(e) {}
+    try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tamanos_producto_nombre ON tamanos(producto_id, nombre)`; } catch(e) {}
+    // Asegurarse de que no exista la columna `precio` (la dejamos fuera: usamos `costo` y `precio_venta`)
+    try { await sql`ALTER TABLE tamanos DROP COLUMN IF EXISTS precio`; } catch(e) {}
+    // Añadir columnas de costo y precio de venta para cada tamaño
+    try { await sql`ALTER TABLE tamanos ADD COLUMN costo NUMERIC`; } catch(e) {}
+    try { await sql`ALTER TABLE tamanos ADD COLUMN precio_venta NUMERIC`; } catch(e) {}
     // Asegurar columnas de relación en productos (categoria_id, marca_id)
     try { await sql`ALTER TABLE productos ADD COLUMN categoria_id INT`; } catch(e) {}
     try { await sql`ALTER TABLE productos ADD COLUMN marca_id INT`; } catch(e) {}
@@ -113,6 +132,9 @@ async function initDB() {
       id SERIAL PRIMARY KEY,
       producto_terminado_id INT
     );`;
+    // Asegurar columna tamano_id en formulas para que la fórmula sea específica a un tamaño
+    try { await sql`ALTER TABLE formulas ADD COLUMN tamano_id INT`; } catch(e) {}
+    try { await sql`ALTER TABLE formulas ADD CONSTRAINT fk_formulas_tamano FOREIGN KEY (tamano_id) REFERENCES tamanos(id) ON DELETE SET NULL`; } catch(e) {}
     // Asegurar columna nombre en formulas (migración segura)
     try { await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`; } catch(e) {}
     await sql`CREATE TABLE IF NOT EXISTS formula_componentes (
