@@ -109,6 +109,8 @@ async function initDB() {
     // Añadir columnas de costo y precio de venta para cada tamaño
     try { await sql`ALTER TABLE tamanos ADD COLUMN costo NUMERIC`; } catch(e) {}
     try { await sql`ALTER TABLE tamanos ADD COLUMN precio_venta NUMERIC`; } catch(e) {}
+    // Añadir columna factor de multiplicador de venta para ajustes de precio por tamaño
+    try { await sql`ALTER TABLE tamanos ADD COLUMN factor_multiplicador_venta NUMERIC`; } catch(e) {}
     // Asegurar columnas de relación en productos (categoria_id, marca_id)
     try { await sql`ALTER TABLE productos ADD COLUMN categoria_id INT`; } catch(e) {}
     try { await sql`ALTER TABLE productos ADD COLUMN marca_id INT`; } catch(e) {}
@@ -159,6 +161,32 @@ async function initDB() {
       stock_fisico INT,
       stock_comprometido INT
     );`;
+
+    // Tabla de ingredientes (maestro de materias primas con costo por unidad)
+    await sql`CREATE TABLE IF NOT EXISTS ingredientes (
+      id BIGSERIAL PRIMARY KEY,
+      codigo VARCHAR(50) UNIQUE,
+      nombre VARCHAR(255) NOT NULL,
+      unidad VARCHAR(20) DEFAULT 'ml',
+      costo NUMERIC(12,4) DEFAULT 0,
+      creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );`;
+
+    // Tabla que guarda los precios y costos calculados por producto/tamaño
+    await sql`CREATE TABLE IF NOT EXISTS precio_productos (
+      id BIGSERIAL PRIMARY KEY,
+      producto_id INTEGER NOT NULL,
+      tamano_id INTEGER NOT NULL,
+      sku VARCHAR(120) UNIQUE,
+      costo_formula NUMERIC(14,4) DEFAULT 0,
+      costo_total_fabricacion NUMERIC(14,4) DEFAULT 0,
+      margen_aplicado NUMERIC(6,4) DEFAULT 1.0,
+      precio_venta_base NUMERIC(14,4) DEFAULT 0,
+      factor_tamano NUMERIC(6,4) DEFAULT 1.0,
+      precio_venta_final NUMERIC(14,4) DEFAULT 0,
+      actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );`;
+    try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_precio_prod_tamano ON precio_productos (producto_id, tamano_id);`; } catch(e) {}
     // Tabla para tasas de cambio
     await sql`CREATE TABLE IF NOT EXISTS tasas_cambio (
       id SERIAL PRIMARY KEY,

@@ -89,12 +89,16 @@ app.use('/api/bancos', authMiddleware, require('./routes/bancos'));
 app.use('/api/formas-pago', authMiddleware, require('./routes/formasPago'));
 app.use('/api/cliente-bancos', authMiddleware, require('./routes/clienteBancos'));
 app.use('/api/pagos', authMiddleware, require('./routes/pagos'));
+// Precios calculados por el motor de reglas
+app.use('/api/precios', authMiddleware, require('./routes/precios'));
 // Tasas de cambio
 app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
 // Categorias
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 // Marcas
 app.use('/api/marcas', authMiddleware, require('./routes/marcas'));
+// Tamaños (formatos / presentaciones)
+app.use('/api/tamanos', authMiddleware, require('./routes/tamanos'));
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');

@@ -88,6 +88,40 @@ router.get('/', async (req, res) => {
       ) inv_tot ON inv_tot.producto_id = p.id
       WHERE p.id = ANY(${prodIds})
     `;
+    // Obtener tamaños y precios calculados para los productos listados
+    const productIds = (rows || []).map(r => r.id);
+    let tamanosRows = [];
+    if (productIds.length > 0) {
+      tamanosRows = await sql`SELECT * FROM tamanos WHERE producto_id = ANY(${productIds}) ORDER BY producto_id, nombre`;
+    }
+    const precioRows = productIds.length > 0 ? await sql`SELECT * FROM precio_productos WHERE producto_id = ANY(${productIds})` : [];
+
+    // Mapear precios por producto_id+tamano_id
+    const precioMap = {};
+    (precioRows || []).forEach(pr => {
+      const key = `${pr.producto_id}:${pr.tamano_id}`;
+      precioMap[key] = pr;
+    });
+
+    // Agrupar tamaños por producto
+    const tamanosPorProducto = {};
+    (tamanosRows || []).forEach(t => {
+      const entry = {
+        id: t.id,
+        nombre: t.nombre,
+        cantidad: t.cantidad != null ? Number(t.cantidad) : null,
+        unidad: t.unidad,
+        costo: t.costo != null ? Number(t.costo) : null,
+        precio_venta: t.precio_venta != null ? Number(t.precio_venta) : null,
+        factor_multiplicador_venta: t.factor_multiplicador_venta != null ? Number(t.factor_multiplicador_venta) : null
+      };
+      const key = `${t.producto_id}:${t.id}`;
+      const pr = precioMap[key];
+      entry.precio_calculado = pr ? Number(pr.precio_venta_final) : null;
+      if (!tamanosPorProducto[t.producto_id]) tamanosPorProducto[t.producto_id] = [];
+      tamanosPorProducto[t.producto_id].push(entry);
+    });
+
     const enriched = (rows || []).map(p => {
       const inventario = (p.inventario && Array.isArray(p.inventario)) ? p.inventario.map(i => ({
         id: i.id,
@@ -113,6 +147,7 @@ router.get('/', async (req, res) => {
         unidad: p.unidad,
         stock: Number(p.stock),
         precio_venta: p.precio_venta,
+        tamanos: tamanosPorProducto[p.id] || [],
         image_url: p.image_url,
         categoria,
         marca,
