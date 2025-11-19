@@ -118,7 +118,7 @@ router.get('/', async (req, res) => {
         }
         if (formulaIdToUse) {
           try {
-            const comps = await sql`
+            let comps = await sql`
               SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
                      COALESCE(mp.nombre, ing.nombre) AS nombre
               FROM formula_componentes fc
@@ -126,6 +126,27 @@ router.get('/', async (req, res) => {
               LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
               WHERE fc.formula_id = ${formulaIdToUse}
             `;
+            // Si no hay componentes para la fórmula exacta, intentar búsqueda difusa por nombre de fórmula
+            if ((!comps || comps.length === 0) && prodItem.producto_nombre) {
+              try {
+                const likePattern = '%' + prodItem.producto_nombre + '%';
+                const frow = await sql`
+                  SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre ILIKE ${likePattern} LIMIT 1
+                `;
+                if (frow && frow[0] && frow[0].id) {
+                  comps = await sql`
+                    SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                           COALESCE(mp.nombre, ing.nombre) AS nombre
+                    FROM formula_componentes fc
+                    LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+                    LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+                    WHERE fc.formula_id = ${frow[0].id}
+                  `;
+                }
+              } catch (e) {
+                // ignore fuzzy lookup errors
+              }
+            }
             prodItem.componentes = (comps || []).map((c) => ({
               materia_prima_id: c.materia_prima_id,
               nombre: c.nombre || null,
@@ -381,31 +402,34 @@ async function completarPedidoTransaccional(pedidoId) {
       e.code = 'INVALID_QTY';
       throw e;
     }
-    // Verificar que exista producción completada suficiente para este producto
-    try {
-      const prodRes = await sql`
-        SELECT COALESCE(SUM(cantidad),0) AS produced FROM ordenes_produccion
-        WHERE producto_terminado_id = ${linea.producto_id} AND estado = 'Completada'
-      `;
-      const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
-      if (produced < qtyNeeded) {
-        await sql`ROLLBACK`;
-        const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
-        e.code = 'NOT_PRODUCED';
-        throw e;
+    // Verificar producción completada suficiente SOLO si la línea refiere a una fórmula (producto producido)
+    if (linea.formula_id) {
+      try {
+        const prodRes = await sql`
+          SELECT COALESCE(SUM(cantidad),0) AS produced FROM ordenes_produccion
+          WHERE producto_terminado_id = ${linea.producto_id} AND estado = 'Completada'
+        `;
+        const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
+        if (produced < qtyNeeded) {
+          await sql`ROLLBACK`;
+          const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
+          e.code = 'NOT_PRODUCED';
+          throw e;
+        }
+      } catch (errCheck) {
+        if (errCheck && errCheck.code === 'NOT_PRODUCED') throw errCheck;
+        // Si falla la comprobación por cualquier motivo, continuar con el flujo de inventario
       }
-    } catch (errCheck) {
-      if (errCheck && errCheck.code === 'NOT_PRODUCED') throw errCheck;
-      // Si falla la comprobación por cualquier motivo, continuar con el flujo de inventario
     }
-    const invs = await sql`
+    // Primero consumir stock comprometido (reservas)
+    const invsReserved = await sql`
       SELECT i.* FROM inventario i
       JOIN almacenes a ON a.id = i.almacen_id
       WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND i.stock_comprometido > 0
       ORDER BY i.stock_comprometido DESC
       FOR UPDATE
     `;
-    for (const inv of invs) {
+    for (const inv of invsReserved) {
       if (qtyNeeded <= 0) break;
       const committed = Number(inv.stock_comprometido);
       if (committed <= 0) continue;
@@ -434,10 +458,51 @@ async function completarPedidoTransaccional(pedidoId) {
       });
       qtyNeeded -= take;
     }
+
+    // Si aún falta cantidad, consumir desde stock disponible (stock_fisico - stock_comprometido)
+    if (qtyNeeded > 0) {
+      const invsAvailable = await sql`
+        SELECT i.* FROM inventario i
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND (i.stock_fisico - i.stock_comprometido) > 0
+        ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+        FOR UPDATE
+      `;
+      for (const inv of invsAvailable) {
+        if (qtyNeeded <= 0) break;
+        const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido || 0);
+        if (available <= 0) continue;
+        const take = Math.min(available, qtyNeeded);
+        const consumed = await sql`
+          UPDATE inventario
+          SET stock_fisico = stock_fisico - ${take}
+          WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0
+          RETURNING id, stock_fisico, stock_comprometido, almacen_id
+        `;
+        if (!consumed || consumed.length === 0) {
+          await sql`ROLLBACK`;
+          const e = new Error(
+            `No se pudo consumir inventario disponible para producto ${linea.producto_id}`
+          );
+          e.code = 'INVENTORY_CONFLICT';
+          throw e;
+        }
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
+          linea.producto_id
+        }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+        movimientos.push({
+          producto_id: linea.producto_id,
+          almacen_id: inv.almacen_id,
+          cantidad: take,
+        });
+        qtyNeeded -= take;
+      }
+    }
+
     if (qtyNeeded > 0) {
       await sql`ROLLBACK`;
-      const e = new Error(`Stock comprometido insuficiente para producto ${linea.producto_id}`);
-      e.code = 'INSUFFICIENT_RESERVED';
+      const e = new Error(`Stock insuficiente para producto ${linea.producto_id}`);
+      e.code = 'INSUFFICIENT_STOCK';
       throw e;
     }
   }
@@ -549,7 +614,7 @@ router.post('/:id/completar', async (req, res) => {
     if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
-    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED')
+    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED' || err.code === 'INSUFFICIENT_STOCK')
       return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
     if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
@@ -569,9 +634,10 @@ router.post('/:id/finalizar', async (req, res) => {
     const result = await completarPedidoTransaccional(pedidoId, pago);
     return res.json(result);
   } catch (err) {
+    if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
-    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED')
+    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED' || err.code === 'INSUFFICIENT_STOCK')
       return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
     if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
@@ -790,7 +856,7 @@ router.put('/:id/status', async (req, res) => {
       } catch (err) {
         if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
         if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
-        if (err.code === 'INSUFFICIENT_RESERVED')
+        if (err.code === 'INSUFFICIENT_RESERVED' || err.code === 'INSUFFICIENT_STOCK')
           return res.status(400).json({ error: err.message });
         if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
         if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });

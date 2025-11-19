@@ -165,7 +165,7 @@ router.post('/', async (req, res) => {
         }
         if (formulaIdToUse) {
           try {
-            const comps = await sql`
+            let comps = await sql`
               SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
                      COALESCE(mp.nombre, ing.nombre) AS nombre
               FROM formula_componentes fc
@@ -173,6 +173,24 @@ router.post('/', async (req, res) => {
               LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
               WHERE fc.formula_id = ${formulaIdToUse}
             `;
+            if ((!comps || comps.length === 0) && prodItem.producto_nombre) {
+              try {
+                const likePattern = '%' + prodItem.producto_nombre + '%';
+                const frow = await sql`
+                  SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre ILIKE ${likePattern} LIMIT 1
+                `;
+                if (frow && frow[0] && frow[0].id) {
+                  comps = await sql`
+                    SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                           COALESCE(mp.nombre, ing.nombre) AS nombre
+                    FROM formula_componentes fc
+                    LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+                    LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+                    WHERE fc.formula_id = ${frow[0].id}
+                  `;
+                }
+              } catch (e) {}
+            }
             prodItem.componentes = (comps || []).map((c) => ({
               materia_prima_id: c.materia_prima_id,
               nombre: c.nombre || null,
