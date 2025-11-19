@@ -39,13 +39,19 @@ router.post('/', async (req, res) => {
   try {
     // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
     try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`;
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
     } catch (e) {}
     try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`;
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
     } catch (e) {}
     try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
     } catch (e) {}
     // Note: no legacy tamano columns required here.
     const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
@@ -63,134 +69,12 @@ router.post('/', async (req, res) => {
     const origenIp = (req.headers['x-forwarded-for'] || req.ip || '').toString();
     const userAgent = (req.headers['user-agent'] || '').toString();
 
-    // Ejecutar en transacción similar a la variante protegida: reservar stock de venta y crear órdenes de producción si hace falta
+    // Ejecutar en transacción: crear pedido público y guardar snapshots por línea
     await sql`BEGIN`;
     try {
-      const produccionesCreadas = [];
-      // map product_id -> formula id used to create production (if any)
-      const productoFormula = {};
-      for (const p of productos) {
-        let qtyNeeded = Number(p.cantidad);
-        if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
-          await sql`ROLLBACK`;
-          return res.status(400).json({ error: 'Cantidad inválida en productos' });
-        }
-        // Verificación previa: sumar disponibilidad total en almacenes de venta
-        const totalDisponibleRows = await sql`
-          SELECT COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS disponible_total
-          FROM inventario i
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE i.producto_id = ${p.producto_id} AND a.es_materia_prima IS NOT TRUE
-        `;
-        const disponibleTotal =
-          totalDisponibleRows && totalDisponibleRows[0]
-            ? Number(totalDisponibleRows[0].disponible_total)
-            : 0;
-        if (disponibleTotal < qtyNeeded) {
-          // Para pedidos públicos: no se permite crear pedidos si la disponibilidad total
-          // (stock_fisico - stock_comprometido) en almacenes de venta es insuficiente.
-          const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
-          const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
-          await sql`ROLLBACK`;
-          return res.status(400).json({
-            error: 'Stock insuficiente',
-            if (qtyNeeded > 0) {
-              const formula =
-                await sql`SELECT * FROM formulas WHERE producto_terminado_id = ${p.producto_id}`;
-              if (formula.length === 0) {
-                await sql`ROLLBACK`;
-                return res.status(400).json({
-                  error: `Producto ${p.producto_id} sin stock suficiente y sin fórmula para producir`,
-                });
-              }
-              const formulaId = formula[0].id;
-              const componentes =
-                await sql`SELECT * FROM formula_componentes WHERE formula_id = ${formulaId}`;
-              for (const comp of componentes) {
-                const required = Number(comp.cantidad) * qtyNeeded;
-                const mpInventarios = await sql`
-                    SELECT i.* FROM inventario i
-                    JOIN almacenes a ON a.id = i.almacen_id
-                    WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima IS TRUE
-                    ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-                  `;
-                let totalDisponible = 0;
-                for (const inv of mpInventarios)
-                  totalDisponible += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
-                if (totalDisponible < required) {
-                  await sql`ROLLBACK`;
-                  // Proveer mensaje más claro con cantidades y nombres para facilitar debugging en frontend
-                  const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
-                  const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
-                  const mpRowName =
-                    await sql`SELECT nombre FROM productos WHERE id = ${comp.materia_prima_id}`;
-                  const mpNombre = mpRowName && mpRowName[0] ? mpRowName[0].nombre : null;
-                  return res.status(400).json({
-                    error: `Materia prima insuficiente`,
-                    details: {
-                      materia_prima_id: comp.materia_prima_id,
-                      materia_prima_nombre: mpNombre,
-                      producto_id: p.producto_id,
-                      producto_nombre: productoNombre,
-                      requerido: required,
-                      disponible: totalDisponible,
-                    },
-                  });
-                }
-              }
-              const orden = await sql`
-                INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
-                VALUES (${p.producto_id}, ${qtyNeeded}, ${formulaId}, 'Pendiente', NOW()) RETURNING *
-              `;
-              produccionesCreadas.push(orden[0]);
-              // registrar que para este producto se creó una producción con esta fórmula
-              productoFormula[p.producto_id] = { id: formulaId, nombre: formula[0].nombre };
-              const prodRowName =
-                await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
-              const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
-              const mpRowName =
-                await sql`SELECT nombre FROM productos WHERE id = ${comp.materia_prima_id}`;
-              const mpNombre = mpRowName && mpRowName[0] ? mpRowName[0].nombre : null;
-              return res.status(400).json({
-                error: `Materia prima insuficiente`,
-                details: {
-                  materia_prima_id: comp.materia_prima_id,
-                  materia_prima_nombre: mpNombre,
-                  producto_id: p.producto_id,
-                  producto_nombre: productoNombre,
-                  requerido: required,
-                  disponible: totalDisponible,
-                },
-              });
-            }
-          }
-          const orden = await sql`
-            INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
-            VALUES (${p.producto_id}, ${qtyNeeded}, ${formulaId}, 'Pendiente', NOW()) RETURNING *
-          `;
-          produccionesCreadas.push(orden[0]);
-          for (const comp of componentes) {
-            let required = Number(comp.cantidad) * qtyNeeded;
-            const mpInventarios = await sql`
-              SELECT i.* FROM inventario i
-              JOIN almacenes a ON a.id = i.almacen_id
-              WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima IS TRUE
-              ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
-            `;
-            for (const inv of mpInventarios) {
-              if (required <= 0) break;
-              const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
-              if (available <= 0) continue;
-              const take = Math.min(available, required);
-              await sql`UPDATE inventario SET stock_comprometido = stock_comprometido + ${take} WHERE id = ${inv.id}`;
-              required -= take;
-            }
-          }
-        }
-      }
       const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
 
-      // Insertar pedido público
+      // Insertar pedido público (sin validar ni reservar stock)
       const pedido = await sql`
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
         VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${
@@ -199,19 +83,22 @@ router.post('/', async (req, res) => {
         userAgent || null
       }, ${tasaMontoVal}) RETURNING *
       `;
+
       for (const p of productos) {
-        // Obtener precio/costo/nombre actual para snapshot en pedido público
+        // Obtener snapshot: preferir fórmula si se provee, sino datos del producto
         let precioUnitario = null;
         let costoUnitario = null;
         let nombreProducto = null;
-        // Si se creó una producción con fórmula, tomar snapshot desde la fórmula
-        const pf = productoFormula[p.producto_id];
-        if (pf && pf.id) {
-          const tamRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${pf.id}`;
-          if (tamRow && tamRow[0]) {
-            precioUnitario = tamRow[0].precio_venta != null ? tamRow[0].precio_venta : null;
-            costoUnitario = tamRow[0].costo != null ? tamRow[0].costo : null;
-            nombreProducto = tamRow[0].nombre != null ? tamRow[0].nombre : null;
+        let formulaIdToSave = null;
+        let formulaNombreToSave = null;
+        if (p.formula_id != null) {
+          const fRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.formula_id} LIMIT 1`;
+          if (fRow && fRow[0]) {
+            precioUnitario = fRow[0].precio_venta != null ? fRow[0].precio_venta : null;
+            costoUnitario = fRow[0].costo != null ? fRow[0].costo : null;
+            nombreProducto = fRow[0].nombre != null ? fRow[0].nombre : null;
+            formulaIdToSave = Number(p.formula_id);
+            formulaNombreToSave = fRow[0].nombre != null ? fRow[0].nombre : null;
           }
         }
         if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
@@ -223,8 +110,8 @@ router.post('/', async (req, res) => {
             nombreProducto = nombreProducto == null ? prodRow[0].nombre : nombreProducto;
           }
         }
-        // insertar la línea (sin campos legacy de 'tamano')
-        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})`;
+        // insertar la línea (guardando formula_id/formula_nombre si se proporcionó)
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave})`;
       }
       await sql`COMMIT`;
 

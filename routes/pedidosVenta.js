@@ -112,71 +112,97 @@ router.post('/', async (req, res) => {
   try {
     const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } =
       req.body;
-    // Ejecutar en transacción: crear pedido y guardar snapshot por línea.
+
+    // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
+    } catch (e) {}
+
     await sql`BEGIN`;
     try {
-      const produccionesCreadas = [];
-      const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
-      const pedido = await sql`
-        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, tasa_cambio_monto)
-        VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${
-        cedula || null
-      }, ${estado}, NOW(), ${tasaMontoVal}) RETURNING *
-      `;
+      const insertedPedido =
+        await sql`INSERT INTO pedidos_venta (cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto, fecha) VALUES (${cliente_id}, ${estado}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${tasa_cambio_monto || null}, NOW()) RETURNING *`;
+      const pedidoId = insertedPedido && insertedPedido[0] ? insertedPedido[0].id : null;
+      if (!pedidoId) {
+        await sql`ROLLBACK`;
+        return res.status(500).json({ error: 'No se pudo crear el pedido' });
+      }
 
       for (const p of productos) {
-        // Validar cantidad
-        const qty = Number(p.cantidad);
-        if (isNaN(qty) || qty <= 0) {
+        const productoId = Number(p.producto_id);
+        const cantidad = Number(p.cantidad);
+        if (isNaN(productoId) || isNaN(cantidad) || cantidad <= 0) {
           await sql`ROLLBACK`;
-          return res.status(400).json({ error: 'Cantidad inválida en productos' });
-        }
-        // Obtener snapshot: preferir fórmula si se provee, sino datos del producto
-        let precioUnitario = null;
-        let costoUnitario = null;
-        let nombreProducto = null;
-        let formulaIdToSave = null;
-        let formulaNombreToSave = null;
-        if (p.formula_id != null) {
-          const fRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.formula_id} LIMIT 1`;
-          if (fRow && fRow[0]) {
-            precioUnitario = fRow[0].precio_venta != null ? fRow[0].precio_venta : null;
-            costoUnitario = fRow[0].costo != null ? fRow[0].costo : null;
-            nombreProducto = fRow[0].nombre != null ? fRow[0].nombre : null;
-            formulaIdToSave = Number(p.formula_id);
-            formulaNombreToSave = fRow[0].nombre != null ? fRow[0].nombre : null;
-          }
-        }
-        if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
-          const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id} LIMIT 1`;
-          if (prodRow && prodRow[0]) {
-            precioUnitario = precioUnitario == null ? prodRow[0].precio_venta : precioUnitario;
-            costoUnitario = costoUnitario == null ? prodRow[0].costo : costoUnitario;
-            nombreProducto = nombreProducto == null ? prodRow[0].nombre : nombreProducto;
-          }
+          return res.status(400).json({ error: 'Producto o cantidad inválidos en líneas' });
         }
 
-        await sql`
-          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre)
-          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave})
-        `;
+        // Obtener producto base
+        const prodRow = await sql`SELECT id, nombre, precio_venta, costo FROM productos WHERE id = ${productoId} LIMIT 1`;
+        if (!prodRow || !prodRow[0]) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: `Producto no encontrado: ${productoId}` });
+        }
+        const prod = prodRow[0];
+
+        // Si se provee formula_id, validar que pertenece al producto (si existe relación en esquema)
+        let formulaId = null;
+        let formulaNombre = null;
+        let costoUnitario = prod.costo;
+        let precioVenta = prod.precio_venta;
+        if (p.formula_id != null) {
+          formulaId = Number(p.formula_id);
+          if (isNaN(formulaId)) {
+            await sql`ROLLBACK`;
+            return res.status(400).json({ error: 'formula_id inválido en líneas' });
+          }
+          // Intentar obtener fórmula que coincida con producto (si aplica)
+          const frow = await sql`SELECT id, nombre, costo, precio_venta, producto_id FROM formulas WHERE id = ${formulaId} LIMIT 1`;
+          if (!frow || !frow[0]) {
+            await sql`ROLLBACK`;
+            return res.status(400).json({ error: `Fórmula no encontrada: ${formulaId}` });
+          }
+          const f = frow[0];
+          // Si la tabla formulas tiene producto_id y existe, validar coincidencia
+          if (f.producto_id && Number(f.producto_id) !== productoId) {
+            await sql`ROLLBACK`;
+            return res.status(400).json({ error: `Formula ${formulaId} no pertenece al producto ${productoId}` });
+          }
+          formulaNombre = f.nombre || null;
+          // Si la formula tiene costos/precios específicos, priorizarlos
+          if (f.costo != null) costoUnitario = f.costo;
+          if (f.precio_venta != null) precioVenta = f.precio_venta;
+        }
+
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, nombre_producto, precio_venta, costo_unitario, formula_id, formula_nombre) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${prod.nombre}, ${precioVenta || null}, ${costoUnitario || null}, ${formulaId || null}, ${formulaNombre || null})`;
       }
 
       await sql`COMMIT`;
 
-      // Recuperar y devolver pedido con detalle
+      // Devolver pedido con detalle
+      const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
       const productosDetalle = await sql`
-         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
-           COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-           COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-           COALESCE(pv.costo_unitario, prod.costo) AS costo,
-           prod.image_url
-         FROM pedido_venta_productos pv
-         LEFT JOIN productos prod ON prod.id = pv.producto_id
-         WHERE pv.pedido_venta_id = ${pedido[0].id}
+        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+               COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+               COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+               COALESCE(pv.costo_unitario, prod.costo) AS costo, prod.image_url
+        FROM pedido_venta_productos pv
+        LEFT JOIN productos prod ON prod.id = pv.producto_id
+        WHERE pv.pedido_venta_id = ${pedidoId}
       `;
       let total = 0;
-      const productosMapeados = productosDetalle.map((item) => {
+      const productosMapeados = (productosDetalle || []).map((item) => {
         const cantidad = Number(item.cantidad);
         const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
         const costo = item.costo != null ? parseFloat(item.costo) : null;
@@ -186,6 +212,8 @@ router.post('/', async (req, res) => {
           id: item.id,
           pedido_venta_id: item.pedido_venta_id,
           producto_id: item.producto_id,
+          formula_id: item.formula_id || null,
+          formula_nombre: item.formula_nombre || null,
           cantidad,
           producto_nombre: item.producto_nombre,
           precio_venta: isNaN(precio) ? null : precio,
@@ -194,12 +222,7 @@ router.post('/', async (req, res) => {
           subtotal,
         };
       });
-      const pedidoObj = {
-        ...pedido[0],
-        productos: productosMapeados,
-        total,
-        producciones: produccionesCreadas,
-      };
+      const pedidoObj = { ...(pedidoRows && pedidoRows[0] ? pedidoRows[0] : {}), productos: productosMapeados, total };
       return res.status(201).json(pedidoObj);
     } catch (errTx) {
       try {
