@@ -66,10 +66,15 @@ router.get('/', async (req, res) => {
            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
            COALESCE(pv.costo_unitario, prod.costo) AS costo,
-           prod.image_url
+           prod.image_url,
+           (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_creada
          FROM pedido_venta_productos pv
          LEFT JOIN productos prod ON prod.id = pv.producto_id
          LEFT JOIN formulas f ON f.id = pv.formula_id
+         LEFT JOIN (
+           SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+           FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+         ) op ON op.producto_terminado_id = prod.id
          WHERE pv.pedido_venta_id = ${p.id}
       `;
       // Normalizar tipos y calcular subtotales
@@ -88,6 +93,7 @@ router.get('/', async (req, res) => {
           formula_nombre: item.formula_nombre || null,
           cantidad,
           producto_nombre: item.producto_nombre,
+          produccion_creada: !!item.produccion_creada,
           precio_venta: isNaN(precio) ? null : precio,
           costo: costo,
           image_url: item.image_url,
@@ -244,9 +250,14 @@ router.get('/:id', async (req, res) => {
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo,
-             prod.image_url
+             prod.image_url,
+             (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_creada
       FROM pedido_venta_productos pv
       LEFT JOIN productos prod ON prod.id = pv.producto_id
+      LEFT JOIN (
+        SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+        FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+      ) op ON op.producto_terminado_id = prod.id
       WHERE pv.pedido_venta_id = ${req.params.id}
     `;
     let total = 0;
@@ -265,6 +276,7 @@ router.get('/:id', async (req, res) => {
         precio_venta: isNaN(precio) ? null : precio,
         costo: costo,
         image_url: item.image_url,
+        produccion_creada: !!item.produccion_creada,
         subtotal,
       };
     });
