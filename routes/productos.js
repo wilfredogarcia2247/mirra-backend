@@ -11,7 +11,8 @@ function validarProducto(body) {
   if (body.marca_id != null && isNaN(Number(body.marca_id))) return 'marca_id inválido';
   if (!body.unidad || typeof body.unidad !== 'string') return 'Unidad requerida';
   if (body.stock != null && isNaN(Number(body.stock))) return 'Stock debe ser numérico';
-  if (body.image_url != null && typeof body.image_url !== 'string') return 'image_url debe ser string';
+  if (body.image_url != null && typeof body.image_url !== 'string')
+    return 'image_url debe ser string';
   return null;
 }
 
@@ -48,18 +49,27 @@ router.get('/', async (req, res) => {
       ) inv_tot ON inv_tot.producto_id = p.id
     `;
     // Normalizar tipos numéricos en JS
-    const productos = (rows || []).map(p => {
-      const inventario = (p.inventario && Array.isArray(p.inventario)) ? p.inventario.map(i => ({
-        id: i.id,
-        almacen_id: i.almacen_id,
-        almacen_nombre: i.almacen_nombre,
-        almacen_tipo: i.almacen_tipo,
-        almacen_ubicacion: i.almacen_ubicacion,
-        stock_fisico: Number(i.stock_fisico),
-        stock_comprometido: Number(i.stock_comprometido),
-        stock_disponible: Number(i.stock_disponible)
-      })) : [];
-      return { ...p, stock: Number(p.stock), inventario, categoria_nombre: p.categoria_nombre || null, marca_nombre: p.marca_nombre || null };
+    const productos = (rows || []).map((p) => {
+      const inventario =
+        p.inventario && Array.isArray(p.inventario)
+          ? p.inventario.map((i) => ({
+              id: i.id,
+              almacen_id: i.almacen_id,
+              almacen_nombre: i.almacen_nombre,
+              almacen_tipo: i.almacen_tipo,
+              almacen_ubicacion: i.almacen_ubicacion,
+              stock_fisico: Number(i.stock_fisico),
+              stock_comprometido: Number(i.stock_comprometido),
+              stock_disponible: Number(i.stock_disponible),
+            }))
+          : [];
+      return {
+        ...p,
+        stock: Number(p.stock),
+        inventario,
+        categoria_nombre: p.categoria_nombre || null,
+        marca_nombre: p.marca_nombre || null,
+      };
     });
     res.json(productos);
   } catch (err) {
@@ -72,14 +82,16 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
   const payloadPost = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const error = validarProducto(payloadPost);
+  const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id } = payloadPost;
+    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id } =
+      payloadPost;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
       const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
-      if (!cat || cat.length === 0) return res.status(400).json({ error: 'categoria_id no existe' });
+      if (!cat || cat.length === 0)
+        return res.status(400).json({ error: 'categoria_id no existe' });
     }
     if (marca_id != null) {
       const m = await sql`SELECT id FROM marcas WHERE id = ${marca_id}`;
@@ -87,7 +99,9 @@ router.post('/', async (req, res) => {
     }
     const result = await sql`
       INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id)
-      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${image_url || null}, ${categoria_id || null}, ${marca_id || null})
+      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${
+      image_url || null
+    }, ${categoria_id || null}, ${marca_id || null})
       RETURNING *
     `;
     res.status(201).json(result[0]);
@@ -129,16 +143,19 @@ router.get('/:id', async (req, res) => {
     `;
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const p = rows[0];
-    const inventario = (p.inventario && Array.isArray(p.inventario)) ? p.inventario.map(i => ({
-      id: i.id,
-      almacen_id: i.almacen_id,
-      almacen_nombre: i.almacen_nombre,
-      almacen_tipo: i.almacen_tipo,
-      almacen_ubicacion: i.almacen_ubicacion,
-      stock_fisico: Number(i.stock_fisico),
-      stock_comprometido: Number(i.stock_comprometido),
-      stock_disponible: Number(i.stock_disponible)
-    })) : [];
+    const inventario =
+      p.inventario && Array.isArray(p.inventario)
+        ? p.inventario.map((i) => ({
+            id: i.id,
+            almacen_id: i.almacen_id,
+            almacen_nombre: i.almacen_nombre,
+            almacen_tipo: i.almacen_tipo,
+            almacen_ubicacion: i.almacen_ubicacion,
+            stock_fisico: Number(i.stock_fisico),
+            stock_comprometido: Number(i.stock_comprometido),
+            stock_disponible: Number(i.stock_disponible),
+          }))
+        : [];
     res.json({ ...p, stock: Number(p.stock), inventario });
   } catch (err) {
     console.error('Error GET /api/productos/:id:', err);
@@ -153,11 +170,13 @@ router.put('/:id', async (req, res) => {
   try {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id } = payloadPut;
+    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id } =
+      payloadPut;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
       const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
-      if (!cat || cat.length === 0) return res.status(400).json({ error: 'categoria_id no existe' });
+      if (!cat || cat.length === 0)
+        return res.status(400).json({ error: 'categoria_id no existe' });
     }
     if (marca_id != null) {
       const m = await sql`SELECT id FROM marcas WHERE id = ${marca_id}`;
@@ -183,29 +202,50 @@ router.delete('/:id', async (req, res) => {
     const prodId = Number(req.params.id);
     if (isNaN(prodId)) return res.status(400).json({ error: 'ID inválido' });
     // 1) Verificar stock en inventario
-    const stockRows = await sql`SELECT COALESCE(SUM(stock_fisico - stock_comprometido),0) AS disponible FROM inventario WHERE producto_id = ${prodId}`;
+    const stockRows =
+      await sql`SELECT COALESCE(SUM(stock_fisico - stock_comprometido),0) AS disponible FROM inventario WHERE producto_id = ${prodId}`;
     const disponible = stockRows && stockRows[0] ? Number(stockRows[0].disponible) : 0;
-    if (disponible > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: existe stock en inventario' });
+    if (disponible > 0)
+      return res
+        .status(400)
+        .json({ error: 'No se puede eliminar el producto: existe stock en inventario' });
     // 2) Verificar que el producto no esté en pedidos de venta
-    const pv = await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE producto_id = ${prodId}`;
-    if (pv && pv[0] && Number(pv[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de venta' });
+    const pv =
+      await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE producto_id = ${prodId}`;
+    if (pv && pv[0] && Number(pv[0].c) > 0)
+      return res
+        .status(400)
+        .json({ error: 'No se puede eliminar el producto: está presente en pedidos de venta' });
     // 3) Verificar que el producto no esté en pedidos de compra
     // Revisar si la tabla de pedidos de compra existe antes de consultar
     try {
-      const pc_tbl = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'pedido_compra_productos' LIMIT 1`;
+      const pc_tbl =
+        await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'pedido_compra_productos' LIMIT 1`;
       if (pc_tbl && pc_tbl.length > 0) {
-        const pc = await sql`SELECT COUNT(*)::int AS c FROM pedido_compra_productos WHERE producto_id = ${prodId}`;
-        if (pc && pc[0] && Number(pc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está presente en pedidos de compra' });
+        const pc =
+          await sql`SELECT COUNT(*)::int AS c FROM pedido_compra_productos WHERE producto_id = ${prodId}`;
+        if (pc && pc[0] && Number(pc[0].c) > 0)
+          return res.status(400).json({
+            error: 'No se puede eliminar el producto: está presente en pedidos de compra',
+          });
       }
     } catch (e) {
       // si la tabla no existe o hay error, no bloqueamos la eliminación por pedidos de compra
     }
     // 4) Verificar que no sea materia prima en una fórmula
-    const fc = await sql`SELECT COUNT(*)::int AS c FROM formula_componentes WHERE materia_prima_id = ${prodId}`;
-    if (fc && fc[0] && Number(fc[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: se usa como materia prima en una fórmula' });
+    const fc =
+      await sql`SELECT COUNT(*)::int AS c FROM formula_componentes WHERE materia_prima_id = ${prodId}`;
+    if (fc && fc[0] && Number(fc[0].c) > 0)
+      return res.status(400).json({
+        error: 'No se puede eliminar el producto: se usa como materia prima en una fórmula',
+      });
     // 5) Verificar que no sea producto terminado en una fórmula
-    const ff = await sql`SELECT COUNT(*)::int AS c FROM formulas WHERE producto_terminado_id = ${prodId}`;
-    if (ff && ff[0] && Number(ff[0].c) > 0) return res.status(400).json({ error: 'No se puede eliminar el producto: está referenciado en una fórmula' });
+    const ff =
+      await sql`SELECT COUNT(*)::int AS c FROM formulas WHERE producto_terminado_id = ${prodId}`;
+    if (ff && ff[0] && Number(ff[0].c) > 0)
+      return res
+        .status(400)
+        .json({ error: 'No se puede eliminar el producto: está referenciado en una fórmula' });
 
     const result = await sql`DELETE FROM productos WHERE id = ${prodId} RETURNING *`;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
@@ -221,8 +261,10 @@ router.post('/:id/almacen', async (req, res) => {
   const prodId = Number(req.params.id);
   const { almacen_id, cantidad, motivo, referencia } = req.body || {};
   if (isNaN(prodId)) return res.status(400).json({ error: 'ID de producto inválido' });
-  if (!almacen_id || isNaN(Number(almacen_id))) return res.status(400).json({ error: 'almacen_id requerido e inválido' });
-  if (cantidad == null || isNaN(Number(cantidad))) return res.status(400).json({ error: 'cantidad requerida y debe ser numérica' });
+  if (!almacen_id || isNaN(Number(almacen_id)))
+    return res.status(400).json({ error: 'almacen_id requerido e inválido' });
+  if (cantidad == null || isNaN(Number(cantidad)))
+    return res.status(400).json({ error: 'cantidad requerida y debe ser numérica' });
   const qty = Number(cantidad);
   if (qty < 0) return res.status(400).json({ error: 'cantidad debe ser >= 0 al crear inventario' });
 
@@ -235,13 +277,15 @@ router.post('/:id/almacen', async (req, res) => {
       return res.status(404).json({ error: 'Producto no encontrado' });
     }
     // Verificar almacén
-    const alm = await sql`SELECT id, nombre FROM almacenes WHERE id = ${almacen_id} FOR NO KEY UPDATE`;
+    const alm =
+      await sql`SELECT id, nombre FROM almacenes WHERE id = ${almacen_id} FOR NO KEY UPDATE`;
     if (!alm || alm.length === 0) {
       await sql`ROLLBACK`;
       return res.status(404).json({ error: 'Almacén no encontrado' });
     }
     // Buscar inventario existente (bloqueo)
-    const invRows = await sql`SELECT * FROM inventario WHERE producto_id = ${prodId} AND almacen_id = ${almacen_id} FOR UPDATE`;
+    const invRows =
+      await sql`SELECT * FROM inventario WHERE producto_id = ${prodId} AND almacen_id = ${almacen_id} FOR UPDATE`;
     let inventory;
     if (invRows && invRows.length > 0) {
       // Si ya existe, incrementamos stock_fisico
@@ -252,7 +296,16 @@ router.post('/:id/almacen', async (req, res) => {
       `;
       inventory = updated[0];
       await sql`COMMIT`;
-      return res.json({ success: true, message: 'Inventario actualizado', data: { ...inventory, stock_disponible: Number(inventory.stock_fisico) - Number(inventory.stock_comprometido), motivo: motivo || null, referencia: referencia || null } });
+      return res.json({
+        success: true,
+        message: 'Inventario actualizado',
+        data: {
+          ...inventory,
+          stock_disponible: Number(inventory.stock_fisico) - Number(inventory.stock_comprometido),
+          motivo: motivo || null,
+          referencia: referencia || null,
+        },
+      });
     } else {
       // Crear nuevo inventario con stock_comprometido = 0
       const created = await sql`
@@ -262,10 +315,23 @@ router.post('/:id/almacen', async (req, res) => {
       `;
       inventory = created[0];
       await sql`COMMIT`;
-      return res.status(201).json({ success: true, message: 'Inventario creado', data: { ...inventory, stock_disponible: Number(inventory.stock_fisico) - Number(inventory.stock_comprometido), motivo: motivo || null, referencia: referencia || null } });
+      return res.status(201).json({
+        success: true,
+        message: 'Inventario creado',
+        data: {
+          ...inventory,
+          stock_disponible: Number(inventory.stock_fisico) - Number(inventory.stock_comprometido),
+          motivo: motivo || null,
+          referencia: referencia || null,
+        },
+      });
     }
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) { /* ignore */ }
+    try {
+      await sql`ROLLBACK`;
+    } catch (e) {
+      /* ignore */
+    }
     return res.status(500).json({ error: err.message });
   }
 });

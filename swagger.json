@@ -5,9 +5,7 @@
     "version": "1.0.0",
     "description": "API REST para gestión de perfumes, inventario, clientes, bancos y pagos."
   },
-  "servers": [
-    { "url": "http://localhost:3000/api" }
-  ],
+  "servers": [{ "url": "http://localhost:3000/api" }],
   "paths": {
     "/productos": {
       "get": {
@@ -16,65 +14,134 @@
       },
       "post": {
         "summary": "Crear producto",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Producto" } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Producto" } }
+          }
+        },
         "responses": { "201": { "description": "Producto creado" } }
       }
     },
-      "/auth/login": {
-        "post": {
-          "summary": "Login de usuario",
-          "requestBody": {
-            "required": true,
+    "/auth/login": {
+      "post": {
+        "summary": "Login de usuario",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string" },
+                  "password": { "type": "string" }
+                },
+                "required": ["email", "password"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token JWT",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "email": { "type": "string" },
-                    "password": { "type": "string" }
-                  },
-                  "required": ["email", "password"]
+                    "token": { "type": "string" }
+                  }
                 }
               }
             }
           },
-          "responses": {
-            "200": {
-              "description": "Token JWT",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "type": "object",
-                    "properties": {
-                      "token": { "type": "string" }
-                    }
-                  }
-                }
-              }
-            },
-            "401": { "description": "Credenciales incorrectas" }
-          }
+          "401": { "description": "Credenciales incorrectas" }
+        }
+      }
+    },
+    "/productos/{id}": {
+      "get": {
+        "summary": "Obtener producto por ID",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Producto" },
+          "404": { "description": "No encontrado" }
         }
       },
-    "/productos/{id}": {
-      "get": { "summary": "Obtener producto por ID", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Producto" }, "404": { "description": "No encontrado" } } },
-      "put": { "summary": "Actualizar producto", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Producto" } } } }, "responses": { "200": { "description": "Producto actualizado" }, "404": { "description": "No encontrado" } } },
-      "delete": { "summary": "Eliminar producto", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Producto eliminado" }, "404": { "description": "No encontrado" } } }
+      "put": {
+        "summary": "Actualizar producto",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Producto" } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Producto actualizado" },
+          "404": { "description": "No encontrado" }
+        }
+      },
+      "delete": {
+        "summary": "Eliminar producto",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Producto eliminado" },
+          "404": { "description": "No encontrado" }
+        }
+      }
     },
-    
+
     "/bancos": {
-      "get": { "summary": "Listar bancos", "responses": { "200": { "description": "Lista de bancos" } } },
-      "post": { "summary": "Crear banco", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Banco" } } } }, "responses": { "201": { "description": "Banco creado" } } }
+      "get": {
+        "summary": "Listar bancos",
+        "responses": { "200": { "description": "Lista de bancos" } }
+      },
+      "post": {
+        "summary": "Crear banco",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Banco" } } }
+        },
+        "responses": { "201": { "description": "Banco creado" } }
+      }
     },
     "/formas-pago": {
-      "get": { "summary": "Listar formas de pago", "responses": { "200": { "description": "Lista de formas de pago" } } },
-      "post": { "summary": "Crear forma de pago", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FormaPago" } } } }, "responses": { "201": { "description": "Forma de pago creada" } } }
+      "get": {
+        "summary": "Listar formas de pago",
+        "responses": { "200": { "description": "Lista de formas de pago" } }
+      },
+      "post": {
+        "summary": "Crear forma de pago",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/FormaPago" } }
+          }
+        },
+        "responses": { "201": { "description": "Forma de pago creada" } }
+      }
     },
     "/pagos": {
-      "get": { "summary": "Listar pagos", "responses": { "200": { "description": "Lista de pagos" } } },
-      "post": { "summary": "Registrar pago", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pago" } } } }, "responses": { "201": { "description": "Pago registrado" } } }
-    }
-    ,
+      "get": {
+        "summary": "Listar pagos",
+        "responses": { "200": { "description": "Lista de pagos" } }
+      },
+      "post": {
+        "summary": "Registrar pago",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pago" } } }
+        },
+        "responses": { "201": { "description": "Pago registrado" } }
+      }
+    },
     "/almacenes": {
       "get": {
         "summary": "Listar almacenes",
@@ -82,14 +149,52 @@
       },
       "post": {
         "summary": "Crear almacen",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Almacen" } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Almacen" } }
+          }
+        },
         "responses": { "201": { "description": "Almacen creado" } }
       }
     },
     "/almacenes/{id}": {
-      "get": { "summary": "Obtener almacen por ID", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Almacen" }, "404": { "description": "No encontrado" } } },
-      "put": { "summary": "Actualizar almacen", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Almacen" } } } }, "responses": { "200": { "description": "Almacen actualizado" }, "404": { "description": "No encontrado" } } },
-      "delete": { "summary": "Eliminar almacen", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Almacen eliminado" }, "404": { "description": "No encontrado" } } }
+      "get": {
+        "summary": "Obtener almacen por ID",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Almacen" },
+          "404": { "description": "No encontrado" }
+        }
+      },
+      "put": {
+        "summary": "Actualizar almacen",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Almacen" } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Almacen actualizado" },
+          "404": { "description": "No encontrado" }
+        }
+      },
+      "delete": {
+        "summary": "Eliminar almacen",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Almacen eliminado" },
+          "404": { "description": "No encontrado" }
+        }
+      }
     }
   },
   "components": {
@@ -114,7 +219,7 @@
         },
         "required": ["nombre"]
       },
-      
+
       "Banco": {
         "type": "object",
         "properties": {
@@ -135,8 +240,7 @@
           "banco_id": { "type": "integer" },
           "monto": { "type": "number" }
         }
-      }
-      ,
+      },
       "Almacen": {
         "type": "object",
         "properties": {
@@ -145,11 +249,9 @@
           "ubicacion": { "type": "string" },
           "responsable": { "type": "string" }
         },
-        "required": ["nombre","tipo"]
+        "required": ["nombre", "tipo"]
       }
     }
   },
-  "security": [
-    { "bearerAuth": [] }
-  ]
+  "security": [{ "bearerAuth": [] }]
 }

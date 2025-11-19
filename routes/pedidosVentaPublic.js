@@ -3,21 +3,31 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
-
 function validarPedido(body) {
   // Para pedidos públicos `cliente_id` es opcional (puede venir null/0).
-  if (body.cliente_id != null && body.cliente_id !== '' && isNaN(Number(body.cliente_id))) return 'ID de cliente inválido';
+  if (body.cliente_id != null && body.cliente_id !== '' && isNaN(Number(body.cliente_id)))
+    return 'ID de cliente inválido';
   // Aceptamos compatiblemente `productos` o `lineas` como nombre del array enviado desde el front
-  const productosArray = Array.isArray(body.productos) ? body.productos : (Array.isArray(body.lineas) ? body.lineas : null);
-  if (!Array.isArray(productosArray) || productosArray.length === 0) return 'Productos (array `productos` o `lineas`) requeridos';
+  const productosArray = Array.isArray(body.productos)
+    ? body.productos
+    : Array.isArray(body.lineas)
+    ? body.lineas
+    : null;
+  if (!Array.isArray(productosArray) || productosArray.length === 0)
+    return 'Productos (array `productos` o `lineas`) requeridos';
   for (const p of productosArray) {
     if (!p.producto_id || isNaN(Number(p.producto_id))) return 'ID de producto requerido';
     if (!p.cantidad || isNaN(Number(p.cantidad))) return 'Cantidad requerida';
   }
   // estado es opcional para pedidos públicos (se fuerza a 'Pendiente' en la inserción)
-  if (body.estado != null && !['Pendiente', 'Enviado', 'Completado'].includes(body.estado)) return 'Estado inválido';
+  if (body.estado != null && !['Pendiente', 'Enviado', 'Completado'].includes(body.estado))
+    return 'Estado inválido';
   // Si se provee tasa_cambio_monto debe ser un número positivo
-  if (body.tasa_cambio_monto != null && (isNaN(Number(body.tasa_cambio_monto)) || Number(body.tasa_cambio_monto) <= 0)) return 'tasa_cambio_monto inválida';
+  if (
+    body.tasa_cambio_monto != null &&
+    (isNaN(Number(body.tasa_cambio_monto)) || Number(body.tasa_cambio_monto) <= 0)
+  )
+    return 'tasa_cambio_monto inválida';
   return null;
 }
 
@@ -27,15 +37,26 @@ router.post('/', async (req, res) => {
   const error = validarPedido(req.body);
   if (error) return res.status(400).json({ error });
   try {
-  // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
-  const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
+    // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
+    } catch (e) {}
+    const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Compatibilidad: aceptar `productos` o `lineas`
-    const productos = Array.isArray(req.body.productos) ? req.body.productos : (Array.isArray(req.body.lineas) ? req.body.lineas : []);
+    const productos = Array.isArray(req.body.productos)
+      ? req.body.productos
+      : Array.isArray(req.body.lineas)
+      ? req.body.lineas
+      : [];
     // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
-    const clienteIdValue = (cliente_id == null || Number(cliente_id) === 0) ? null : Number(cliente_id);
+    const clienteIdValue =
+      cliente_id == null || Number(cliente_id) === 0 ? null : Number(cliente_id);
     const forcedEstado = 'Pendiente';
     // Capturar IP y User-Agent para trazabilidad
     const origenIp = (req.headers['x-forwarded-for'] || req.ip || '').toString();
@@ -45,7 +66,7 @@ router.post('/', async (req, res) => {
     await sql`BEGIN`;
     try {
       const produccionesCreadas = [];
-  for (const p of productos) {
+      for (const p of productos) {
         let qtyNeeded = Number(p.cantidad);
         if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
           await sql`ROLLBACK`;
@@ -58,14 +79,25 @@ router.post('/', async (req, res) => {
           JOIN almacenes a ON a.id = i.almacen_id
           WHERE i.producto_id = ${p.producto_id} AND a.es_materia_prima IS NOT TRUE
         `;
-        const disponibleTotal = totalDisponibleRows && totalDisponibleRows[0] ? Number(totalDisponibleRows[0].disponible_total) : 0;
+        const disponibleTotal =
+          totalDisponibleRows && totalDisponibleRows[0]
+            ? Number(totalDisponibleRows[0].disponible_total)
+            : 0;
         if (disponibleTotal < qtyNeeded) {
           // Para pedidos públicos: no se permite crear pedidos si la disponibilidad total
           // (stock_fisico - stock_comprometido) en almacenes de venta es insuficiente.
           const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
           const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
           await sql`ROLLBACK`;
-          return res.status(400).json({ error: 'Stock insuficiente', details: { producto_id: p.producto_id, producto_nombre: productoNombre, requerido: qtyNeeded, disponible: disponibleTotal } });
+          return res.status(400).json({
+            error: 'Stock insuficiente',
+            details: {
+              producto_id: p.producto_id,
+              producto_nombre: productoNombre,
+              requerido: qtyNeeded,
+              disponible: disponibleTotal,
+            },
+          });
         }
 
         const inventariosVenta = await sql`
@@ -83,13 +115,17 @@ router.post('/', async (req, res) => {
           if (qtyNeeded === 0) break;
         }
         if (qtyNeeded > 0) {
-          const formula = await sql`SELECT * FROM formulas WHERE producto_terminado_id = ${p.producto_id}`;
+          const formula =
+            await sql`SELECT * FROM formulas WHERE producto_terminado_id = ${p.producto_id}`;
           if (formula.length === 0) {
             await sql`ROLLBACK`;
-            return res.status(400).json({ error: `Producto ${p.producto_id} sin stock suficiente y sin fórmula para producir` });
+            return res.status(400).json({
+              error: `Producto ${p.producto_id} sin stock suficiente y sin fórmula para producir`,
+            });
           }
           const formulaId = formula[0].id;
-          const componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${formulaId}`;
+          const componentes =
+            await sql`SELECT * FROM formula_componentes WHERE formula_id = ${formulaId}`;
           for (const comp of componentes) {
             const required = Number(comp.cantidad) * qtyNeeded;
             const mpInventarios = await sql`
@@ -99,15 +135,28 @@ router.post('/', async (req, res) => {
                 ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
               `;
             let totalDisponible = 0;
-            for (const inv of mpInventarios) totalDisponible += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+            for (const inv of mpInventarios)
+              totalDisponible += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
             if (totalDisponible < required) {
               await sql`ROLLBACK`;
               // Proveer mensaje más claro con cantidades y nombres para facilitar debugging en frontend
-              const prodRowName = await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
+              const prodRowName =
+                await sql`SELECT nombre FROM productos WHERE id = ${p.producto_id}`;
               const productoNombre = prodRowName && prodRowName[0] ? prodRowName[0].nombre : null;
-              const mpRowName = await sql`SELECT nombre FROM productos WHERE id = ${comp.materia_prima_id}`;
+              const mpRowName =
+                await sql`SELECT nombre FROM productos WHERE id = ${comp.materia_prima_id}`;
               const mpNombre = mpRowName && mpRowName[0] ? mpRowName[0].nombre : null;
-              return res.status(400).json({ error: `Materia prima insuficiente`, details: { materia_prima_id: comp.materia_prima_id, materia_prima_nombre: mpNombre, producto_id: p.producto_id, producto_nombre: productoNombre, requerido: required, disponible: totalDisponible } });
+              return res.status(400).json({
+                error: `Materia prima insuficiente`,
+                details: {
+                  materia_prima_id: comp.materia_prima_id,
+                  materia_prima_nombre: mpNombre,
+                  producto_id: p.producto_id,
+                  producto_nombre: productoNombre,
+                  requerido: required,
+                  disponible: totalDisponible,
+                },
+              });
             }
           }
           const orden = await sql`
@@ -139,15 +188,23 @@ router.post('/', async (req, res) => {
       // Insertar pedido público
       const pedido = await sql`
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
-        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${forcedEstado}, NOW(), ${origenIp || null}, ${userAgent || null}, ${tasaMontoVal}) RETURNING *
+        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${
+        cedula || null
+      }, ${forcedEstado}, NOW(), ${origenIp || null}, ${
+        userAgent || null
+      }, ${tasaMontoVal}) RETURNING *
       `;
-  for (const p of productos) {
+      for (const p of productos) {
         // Obtener precio/costo/nombre actual para snapshot en pedido público
-        const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
-  const precioUnitario = (prodRow && prodRow[0] && prodRow[0].precio_venta != null) ? prodRow[0].precio_venta : null;
-  const costoUnitario = (prodRow && prodRow[0] && prodRow[0].costo != null) ? prodRow[0].costo : null;
-  const nombreProducto = (prodRow && prodRow[0] && prodRow[0].nombre != null) ? prodRow[0].nombre : null;
-  await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})`;
+        const prodRow =
+          await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
+        const precioUnitario =
+          prodRow && prodRow[0] && prodRow[0].precio_venta != null ? prodRow[0].precio_venta : null;
+        const costoUnitario =
+          prodRow && prodRow[0] && prodRow[0].costo != null ? prodRow[0].costo : null;
+        const nombreProducto =
+          prodRow && prodRow[0] && prodRow[0].nombre != null ? prodRow[0].nombre : null;
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})`;
       }
       await sql`COMMIT`;
 
@@ -162,7 +219,7 @@ router.post('/', async (req, res) => {
         WHERE pv.pedido_venta_id = ${pedido[0].id}
       `;
       let total = 0;
-      const productosMapeados = productosDetalle.map(item => {
+      const productosMapeados = productosDetalle.map((item) => {
         const cantidad = Number(item.cantidad);
         const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
         const costo = item.costo != null ? parseFloat(item.costo) : null;
@@ -177,13 +234,20 @@ router.post('/', async (req, res) => {
           precio_venta: isNaN(precio) ? null : precio,
           costo: costo,
           image_url: item.image_url,
-          subtotal
+          subtotal,
         };
       });
-      const pedidoObj = { ...pedido[0], productos: productosMapeados, total, producciones: produccionesCreadas };
+      const pedidoObj = {
+        ...pedido[0],
+        productos: productosMapeados,
+        total,
+        producciones: produccionesCreadas,
+      };
       res.status(201).json(pedidoObj);
     } catch (errTx) {
-      try { await sql`ROLLBACK`; } catch (e) {}
+      try {
+        await sql`ROLLBACK`;
+      } catch (e) {}
       throw errTx;
     }
   } catch (err) {

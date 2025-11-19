@@ -4,6 +4,6 @@ const OrdenProduccionSchema = new mongoose.Schema({
   cantidad: Number,
   formula: { type: mongoose.Schema.Types.ObjectId, ref: 'Formula' },
   estado: { type: String, enum: ['Pendiente', 'Completada'] },
-  fecha: Date
+  fecha: Date,
 });
 module.exports = mongoose.model('OrdenProduccion', OrdenProduccionSchema);

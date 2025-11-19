@@ -7,7 +7,9 @@ async function main() {
   console.log('ATENCIÓN: este script TRUNCARÁ todas las tablas excepto `usuarios`.');
   const force = process.env.FORCE_CLEAR === 'true' || process.argv.includes('--yes');
   if (!force) {
-    console.log('Para ejecutar exporta FORCE_CLEAR=true o pasa --yes. Ej: FORCE_CLEAR=true node scripts/truncate_except_usuarios.js');
+    console.log(
+      'Para ejecutar exporta FORCE_CLEAR=true o pasa --yes. Ej: FORCE_CLEAR=true node scripts/truncate_except_usuarios.js'
+    );
     process.exit(1);
   }
 

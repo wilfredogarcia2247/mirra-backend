@@ -3,10 +3,11 @@ require('dotenv').config();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
-(async ()=>{
+(async () => {
   try {
     console.log('--- Contenido de banco_formas_pago (raw) ---');
-    const raw = await sql`SELECT bf.id, bf.banco_id, bf.forma_pago_id, bf.detalles, f.nombre as forma_nombre, b.nombre as banco_nombre FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id JOIN bancos b ON b.id = bf.banco_id ORDER BY bf.id`;
+    const raw =
+      await sql`SELECT bf.id, bf.banco_id, bf.forma_pago_id, bf.detalles, f.nombre as forma_nombre, b.nombre as banco_nombre FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id JOIN bancos b ON b.id = bf.banco_id ORDER BY bf.id`;
     console.log(JSON.stringify(raw, null, 2));
 
     console.log('\n--- Agregación equivalente a GET /api/bancos ---');

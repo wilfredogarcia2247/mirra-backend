@@ -5,7 +5,8 @@ const sql = neon(process.env.DATABASE_URL);
 
 function validarMarca(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
-  if (body.descripcion != null && typeof body.descripcion !== 'string') return 'Descripcion inválida';
+  if (body.descripcion != null && typeof body.descripcion !== 'string')
+    return 'Descripcion inválida';
   return null;
 }
 
@@ -27,7 +28,9 @@ router.post('/', async (req, res) => {
   try {
     const { nombre, descripcion } = req.body;
     const inserted = await sql`
-      INSERT INTO marcas (nombre, descripcion) VALUES (${nombre}, ${descripcion || null}) RETURNING *
+      INSERT INTO marcas (nombre, descripcion) VALUES (${nombre}, ${
+      descripcion || null
+    }) RETURNING *
     `;
     res.status(201).json(inserted && inserted[0] ? inserted[0] : null);
   } catch (e) {
@@ -60,13 +63,16 @@ router.put('/:id', async (req, res) => {
   try {
     const { nombre, descripcion } = req.body;
     const updated = await sql`
-      UPDATE marcas SET nombre = ${nombre}, descripcion = ${descripcion || null} WHERE id = ${id} RETURNING *
+      UPDATE marcas SET nombre = ${nombre}, descripcion = ${
+      descripcion || null
+    } WHERE id = ${id} RETURNING *
     `;
     if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
     res.json(updated[0]);
   } catch (e) {
     console.error('Error actualizando marca:', e);
-    if (e && e.code === '23505') return res.status(400).json({ error: 'Nombre de marca ya en uso' });
+    if (e && e.code === '23505')
+      return res.status(400).json({ error: 'Nombre de marca ya en uso' });
     res.status(500).json({ error: 'Error actualizando marca' });
   }
 });
@@ -79,7 +85,8 @@ router.delete('/:id', async (req, res) => {
     // Verificar que no existan productos asociados
     const prodCount = await sql`SELECT COUNT(*)::int AS c FROM productos WHERE marca_id = ${id}`;
     const c = prodCount && prodCount[0] ? Number(prodCount[0].c) : 0;
-    if (c > 0) return res.status(400).json({ error: 'No se puede eliminar: existen productos asociados' });
+    if (c > 0)
+      return res.status(400).json({ error: 'No se puede eliminar: existen productos asociados' });
 
     const deleted = await sql`DELETE FROM marcas WHERE id = ${id} RETURNING *`;
     if (!deleted || deleted.length === 0) return res.status(404).json({ error: 'No encontrado' });

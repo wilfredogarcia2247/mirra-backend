@@ -4,7 +4,9 @@ const express = require('express');
 const router = express.Router();
 
 router.use((req, res) => {
-  res.status(410).json({ error: 'El endpoint /api/tamanos fue removido. Use /api/formulas para presentaciones.' });
+  res.status(410).json({
+    error: 'El endpoint /api/tamanos fue removido. Use /api/formulas para presentaciones.',
+  });
 });
 
 module.exports = router;

@@ -10,7 +10,6 @@ async function main() {
     // Usaremos el producto de ejemplo creado en initNeonDB (id 7: 'Perfume Floral N°5 - 50ml')
     const demoProductoId = 7;
 
-
     // Insertar precios calculados de ejemplo (si no existen)
 
     console.log('Seed completado.');
@@ -22,7 +21,7 @@ async function main() {
 }
 
 main();
-  // Archivo deshabilitado: la tabla `tamanos` fue eliminada
-  // Este script era responsable de insertar datos de prueba en `tamanos`.
-  // Eliminado por petición: conservar como stub para historial.
-  console.log('seed_tamanos_testdata.js: script deshabilitado (tamanos eliminado)');
+// Archivo deshabilitado: la tabla `tamanos` fue eliminada
+// Este script era responsable de insertar datos de prueba en `tamanos`.
+// Eliminado por petición: conservar como stub para historial.
+console.log('seed_tamanos_testdata.js: script deshabilitado (tamanos eliminado)');

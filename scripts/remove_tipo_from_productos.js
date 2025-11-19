@@ -4,7 +4,8 @@ const sql = neon(process.env.DATABASE_URL);
 
 async function run() {
   try {
-    const col = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'productos' AND column_name = 'tipo'`;
+    const col =
+      await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'productos' AND column_name = 'tipo'`;
     if (!col || col.length === 0) {
       console.log('La columna "tipo" no existe en productos. Nada que hacer.');
       process.exit(0);

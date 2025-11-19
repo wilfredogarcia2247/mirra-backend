@@ -7,7 +7,9 @@ async function migrateAndDrop() {
     console.log('Iniciando migración de precio_unitario -> precio_venta y DROP COLUMN...');
 
     // Asegurar columnas objetivo (no hacen daño si ya existen)
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`;
+    } catch (e) {}
 
     // Ver si la columna precio_unitario existe
     const colExistsRes = await sql`
@@ -19,7 +21,8 @@ async function migrateAndDrop() {
       console.log('La columna precio_unitario no existe — nada que migrar o dropear.');
     } else {
       // Ver cuántas filas tienen precio_unitario
-      const countBefore = await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE precio_unitario IS NOT NULL`;
+      const countBefore =
+        await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE precio_unitario IS NOT NULL`;
       const before = countBefore && countBefore[0] ? Number(countBefore[0].c) : 0;
       console.log('Filas con precio_unitario antes:', before);
 
@@ -37,11 +40,14 @@ async function migrateAndDrop() {
 
         await sql`COMMIT`;
       } catch (err) {
-        try { await sql`ROLLBACK`; } catch (e) {}
+        try {
+          await sql`ROLLBACK`;
+        } catch (e) {}
         throw err;
       }
 
-      const countAfter = await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE precio_unitario IS NOT NULL`;
+      const countAfter =
+        await sql`SELECT COUNT(*)::int AS c FROM pedido_venta_productos WHERE precio_unitario IS NOT NULL`;
       const after = countAfter && countAfter[0] ? Number(countAfter[0].c) : 0;
       console.log('Filas con precio_unitario después (debe ser 0):', after);
     }

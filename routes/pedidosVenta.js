@@ -12,17 +12,24 @@ function validarPedido(body) {
     if (!p.cantidad || isNaN(Number(p.cantidad))) return 'Cantidad requerida';
     if (p.tamano_id != null && isNaN(Number(p.tamano_id))) return 'tamano_id inválido en productos';
   }
-  if (!body.estado || !['Pendiente', 'Enviado', 'Completado'].includes(body.estado)) return 'Estado inválido';
+  if (!body.estado || !['Pendiente', 'Enviado', 'Completado'].includes(body.estado))
+    return 'Estado inválido';
   // Si se provee tasa_cambio_monto debe ser un número positivo
-  if (body.tasa_cambio_monto != null && (isNaN(Number(body.tasa_cambio_monto)) || Number(body.tasa_cambio_monto) <= 0)) return 'tasa_cambio_monto inválida';
+  if (
+    body.tasa_cambio_monto != null &&
+    (isNaN(Number(body.tasa_cambio_monto)) || Number(body.tasa_cambio_monto) <= 0)
+  )
+    return 'tasa_cambio_monto inválida';
   return null;
 }
 
 function validarPagoObj(pago) {
   if (!pago) return null; // es opcional
   if (typeof pago !== 'object') return 'Pago inválido';
-  if (pago.forma_pago_id == null || isNaN(Number(pago.forma_pago_id))) return 'forma_pago_id requerido en pago';
-  if (pago.monto == null || isNaN(Number(pago.monto)) || Number(pago.monto) <= 0) return 'monto inválido en pago';
+  if (pago.forma_pago_id == null || isNaN(Number(pago.forma_pago_id)))
+    return 'forma_pago_id requerido en pago';
+  if (pago.monto == null || isNaN(Number(pago.monto)) || Number(pago.monto) <= 0)
+    return 'monto inválido en pago';
   if (pago.banco_id != null && isNaN(Number(pago.banco_id))) return 'banco_id inválido en pago';
   // referencia y fecha_transaccion son opcionales; si fecha_transaccion existe debe ser parseable
   if (pago.fecha_transaccion) {
@@ -34,12 +41,22 @@ function validarPagoObj(pago) {
 
 router.get('/', async (req, res) => {
   try {
-  // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_id INT;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_nombre TEXT;`; } catch(e) {}
+    // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_nombre TEXT;`;
+    } catch (e) {}
     const pedidos = await sql`SELECT * FROM pedidos_venta`;
     const pedidosConDetalle = [];
     for (const p of pedidos) {
@@ -55,7 +72,7 @@ router.get('/', async (req, res) => {
       `;
       // Normalizar tipos y calcular subtotales
       let total = 0;
-      const productosMapeados = productos.map(item => {
+      const productosMapeados = productos.map((item) => {
         const cantidad = Number(item.cantidad);
         const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
         const costo = item.costo != null ? parseFloat(item.costo) : null;
@@ -72,13 +89,13 @@ router.get('/', async (req, res) => {
           precio_venta: isNaN(precio) ? null : precio,
           costo: costo,
           image_url: item.image_url,
-          subtotal
+          subtotal,
         };
       });
       pedidosConDetalle.push({
         ...p,
         productos: productosMapeados,
-        total
+        total,
       });
     }
     res.json(pedidosConDetalle);
@@ -91,7 +108,8 @@ router.post('/', async (req, res) => {
   const error = validarPedido(req.body);
   if (error) return res.status(400).json({ error });
   try {
-  const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
+    const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } =
+      req.body;
     // Ejecutar en transacción: crear pedido y guardar snapshot por línea.
     await sql`BEGIN`;
     try {
@@ -99,7 +117,9 @@ router.post('/', async (req, res) => {
       const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
       const pedido = await sql`
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, tasa_cambio_monto)
-        VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${estado}, NOW(), ${tasaMontoVal}) RETURNING *
+        VALUES (${cliente_id || null}, ${nombre_cliente || null}, ${telefono || null}, ${
+        cedula || null
+      }, ${estado}, NOW(), ${tasaMontoVal}) RETURNING *
       `;
 
       for (const p of productos) {
@@ -115,7 +135,8 @@ router.post('/', async (req, res) => {
         let nombreProducto = null;
         if (p.tamano_id != null) {
           // Intentar obtener snapshot desde formulas (ahora representan tamaños)
-          const tamRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.tamano_id}`;
+          const tamRow =
+            await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.tamano_id}`;
           if (tamRow && tamRow[0]) {
             precioUnitario = tamRow[0].precio_venta != null ? tamRow[0].precio_venta : null;
             costoUnitario = tamRow[0].costo != null ? tamRow[0].costo : null;
@@ -123,7 +144,8 @@ router.post('/', async (req, res) => {
           }
         }
         if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
-          const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
+          const prodRow =
+            await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
           if (prodRow && prodRow[0]) {
             precioUnitario = precioUnitario == null ? prodRow[0].precio_venta : precioUnitario;
             costoUnitario = costoUnitario == null ? prodRow[0].costo : costoUnitario;
@@ -133,7 +155,9 @@ router.post('/', async (req, res) => {
 
         await sql`
           INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, tamano_id, cantidad, costo_unitario, precio_venta, nombre_producto, tamano_nombre)
-          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.tamano_id || null}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${p.tamano_nombre || null})
+          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.tamano_id || null}, ${
+          p.cantidad
+        }, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${p.tamano_nombre || null})
         `;
       }
 
@@ -154,7 +178,7 @@ router.post('/', async (req, res) => {
          WHERE pv.pedido_venta_id = ${pedido[0].id}
       `;
       let total = 0;
-      const productosMapeados = productosDetalle.map(item => {
+      const productosMapeados = productosDetalle.map((item) => {
         const cantidad = Number(item.cantidad);
         const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
         const costo = item.costo != null ? parseFloat(item.costo) : null;
@@ -171,13 +195,20 @@ router.post('/', async (req, res) => {
           precio_venta: isNaN(precio) ? null : precio,
           costo: costo,
           image_url: item.image_url,
-          subtotal
+          subtotal,
         };
       });
-      const pedidoObj = { ...pedido[0], productos: productosMapeados, total, producciones: produccionesCreadas };
+      const pedidoObj = {
+        ...pedido[0],
+        productos: productosMapeados,
+        total,
+        producciones: produccionesCreadas,
+      };
       return res.status(201).json(pedidoObj);
     } catch (errTx) {
-      try { await sql`ROLLBACK`; } catch (e) {}
+      try {
+        await sql`ROLLBACK`;
+      } catch (e) {}
       throw errTx;
     }
   } catch (err) {
@@ -200,7 +231,7 @@ router.get('/:id', async (req, res) => {
       WHERE pv.pedido_venta_id = ${req.params.id}
     `;
     let total = 0;
-    const productosMapeados = productos.map(item => {
+    const productosMapeados = productos.map((item) => {
       const cantidad = Number(item.cantidad);
       const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
       const costo = item.costo != null ? parseFloat(item.costo) : null;
@@ -215,7 +246,7 @@ router.get('/:id', async (req, res) => {
         precio_venta: isNaN(precio) ? null : precio,
         costo: costo,
         image_url: item.image_url,
-        subtotal
+        subtotal,
       };
     });
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
@@ -234,24 +265,31 @@ async function completarPedidoTransaccional(pedidoId) {
   const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
   if (!pedidoRows || pedidoRows.length === 0) {
     await sql`ROLLBACK`;
-    const e = new Error('Pedido no encontrado'); e.code = 'NOT_FOUND'; throw e;
+    const e = new Error('Pedido no encontrado');
+    e.code = 'NOT_FOUND';
+    throw e;
   }
   const pedido = pedidoRows[0];
   if (pedido.estado === 'Completado') {
     await sql`ROLLBACK`;
-    const e = new Error('Pedido ya completado'); e.code = 'ALREADY_COMPLETED'; throw e;
+    const e = new Error('Pedido ya completado');
+    e.code = 'ALREADY_COMPLETED';
+    throw e;
   }
 
-  const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+  const lineas =
+    await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
   const movimientos = [];
 
   for (const linea of lineas) {
     let qtyNeeded = Number(linea.cantidad);
     if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
       await sql`ROLLBACK`;
-      const e = new Error('Cantidad inválida en líneas del pedido'); e.code = 'INVALID_QTY'; throw e;
+      const e = new Error('Cantidad inválida en líneas del pedido');
+      e.code = 'INVALID_QTY';
+      throw e;
     }
-      const invs = await sql`
+    const invs = await sql`
       SELECT i.* FROM inventario i
       JOIN almacenes a ON a.id = i.almacen_id
       WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND i.stock_comprometido > 0
@@ -271,15 +309,27 @@ async function completarPedidoTransaccional(pedidoId) {
       `;
       if (!consumed || consumed.length === 0) {
         await sql`ROLLBACK`;
-        const e = new Error(`No se pudo consumir inventario reservado para producto ${linea.producto_id}`); e.code = 'INVENTORY_CONFLICT'; throw e;
+        const e = new Error(
+          `No se pudo consumir inventario reservado para producto ${linea.producto_id}`
+        );
+        e.code = 'INVENTORY_CONFLICT';
+        throw e;
       }
-      await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
-      movimientos.push({ producto_id: linea.producto_id, almacen_id: inv.almacen_id, cantidad: take });
+      await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
+        linea.producto_id
+      }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+      movimientos.push({
+        producto_id: linea.producto_id,
+        almacen_id: inv.almacen_id,
+        cantidad: take,
+      });
       qtyNeeded -= take;
     }
     if (qtyNeeded > 0) {
       await sql`ROLLBACK`;
-      const e = new Error(`Stock comprometido insuficiente para producto ${linea.producto_id}`); e.code = 'INSUFFICIENT_RESERVED'; throw e;
+      const e = new Error(`Stock comprometido insuficiente para producto ${linea.producto_id}`);
+      e.code = 'INSUFFICIENT_RESERVED';
+      throw e;
     }
   }
 
@@ -312,9 +362,11 @@ async function completarPedidoTransaccional(pedidoId) {
         if (pagoObj.banco_id != null) {
           try {
             const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pagoObj.banco_id}`;
-            const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+            const moneda =
+              bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
             if (moneda) {
-              const tasaRow = await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
+              const tasaRow =
+                await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
               if (tasaRow && tasaRow[0]) {
                 tasaVal = tasaRow[0].monto;
                 tasaSimbolo = moneda; // usar el símbolo del banco
@@ -325,7 +377,8 @@ async function completarPedidoTransaccional(pedidoId) {
         // Si no se obtuvo tasa desde la moneda del banco, intentar detalles por combinación banco+forma
         if (tasaVal == null && pagoObj.banco_id != null && pagoObj.forma_pago_id != null) {
           try {
-            const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pagoObj.banco_id} AND forma_pago_id = ${pagoObj.forma_pago_id} LIMIT 1`;
+            const bf =
+              await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pagoObj.banco_id} AND forma_pago_id = ${pagoObj.forma_pago_id} LIMIT 1`;
             if (bf && bf[0] && bf[0].detalles) {
               const det = bf[0].detalles;
               if (det.tasa != null) tasaVal = det.tasa;
@@ -342,7 +395,8 @@ async function completarPedidoTransaccional(pedidoId) {
       // Fallback: si no encontramos una tasa específica, usar la tasa activa cualquiera
       if (tasaVal == null) {
         try {
-          const anyT = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
+          const anyT =
+            await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
           if (anyT && anyT[0]) {
             tasaVal = anyT[0].monto;
             tasaSimbolo = anyT[0].simbolo;
@@ -353,7 +407,11 @@ async function completarPedidoTransaccional(pedidoId) {
       // Insertar registro de pago incluyendo tasa y símbolo
       const inserted = await sql`
         INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
-        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto}, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *
+        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${
+        pagoObj.monto
+      }, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${
+        tasaVal || null
+      }, ${tasaSimbolo || null}) RETURNING *
       `;
       pagoInserted = inserted && inserted[0] ? inserted[0] : null;
     } catch (e) {
@@ -381,7 +439,8 @@ router.post('/:id/completar', async (req, res) => {
   } catch (err) {
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
-    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
+    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED')
+      return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
     if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
     console.error(err);
@@ -402,7 +461,8 @@ router.post('/:id/finalizar', async (req, res) => {
   } catch (err) {
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
-    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
+    if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED')
+      return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
     if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
     console.error(err);
@@ -450,9 +510,11 @@ router.post('/:id/pagos', async (req, res) => {
         if (pago && pago.banco_id != null) {
           try {
             const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pago.banco_id}`;
-            const moneda = bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+            const moneda =
+              bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
             if (moneda) {
-              const tasaRow = await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
+              const tasaRow =
+                await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
               if (tasaRow && tasaRow[0]) {
                 tasaVal = tasaRow[0].monto;
                 tasaSimbolo = moneda;
@@ -462,11 +524,13 @@ router.post('/:id/pagos', async (req, res) => {
           // Fallback: si no se obtuvo tasa desde moneda del banco, verificar detalles por banco+forma
           if (tasaVal == null) {
             try {
-              const bf = await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pago.banco_id} AND forma_pago_id = ${pago.forma_pago_id} LIMIT 1`;
+              const bf =
+                await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pago.banco_id} AND forma_pago_id = ${pago.forma_pago_id} LIMIT 1`;
               if (bf && bf[0] && bf[0].detalles) {
                 const det = bf[0].detalles;
                 if (det.tasa != null) tasaVal = det.tasa;
-                if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo; else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
+                if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo;
+                else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
               }
             } catch (e) {}
           }
@@ -476,7 +540,8 @@ router.post('/:id/pagos', async (req, res) => {
       }
       if (tasaVal == null) {
         try {
-          const anyT = await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
+          const anyT =
+            await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
           if (anyT && anyT[0]) {
             tasaVal = anyT[0].monto;
             tasaSimbolo = anyT[0].simbolo;
@@ -486,12 +551,18 @@ router.post('/:id/pagos', async (req, res) => {
 
       const inserted = await sql`
         INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
-        VALUES (${pedidoId}, ${pago.forma_pago_id}, ${pago.banco_id || null}, ${pago.monto}, ${pago.referencia || null}, ${pago.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null}) RETURNING *
+        VALUES (${pedidoId}, ${pago.forma_pago_id}, ${pago.banco_id || null}, ${pago.monto}, ${
+        pago.referencia || null
+      }, ${pago.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${
+        tasaSimbolo || null
+      }) RETURNING *
       `;
       await sql`COMMIT`;
       return res.status(201).json({ ok: true, pago: inserted && inserted[0] ? inserted[0] : null });
     } catch (errTx) {
-      try { await sql`ROLLBACK`; } catch (e) {}
+      try {
+        await sql`ROLLBACK`;
+      } catch (e) {}
       throw errTx;
     }
   } catch (err) {
@@ -516,7 +587,7 @@ router.get('/:id/pagos', async (req, res) => {
       WHERE p.pedido_venta_id = ${pedidoId}
       ORDER BY p.fecha DESC
     `;
-    const enriched = (rows || []).map(r => {
+    const enriched = (rows || []).map((r) => {
       return {
         id: r.id,
         pedido_venta_id: r.pedido_venta_id,
@@ -528,8 +599,17 @@ router.get('/:id/pagos', async (req, res) => {
         fecha: r.fecha,
         tasa: r.tasa,
         tasa_simbolo: r.tasa_simbolo,
-        banco: r.banco_id ? { id: r.banco_id, nombre: r.banco_nombre, moneda: r.banco_moneda, detalles: r.banco_detalles } : null,
-        forma_pago: r.forma_pago_id ? { id: r.forma_pago_id, nombre: r.forma_nombre, detalles: r.forma_detalles } : null
+        banco: r.banco_id
+          ? {
+              id: r.banco_id,
+              nombre: r.banco_nombre,
+              moneda: r.banco_moneda,
+              detalles: r.banco_detalles,
+            }
+          : null,
+        forma_pago: r.forma_pago_id
+          ? { id: r.forma_pago_id, nombre: r.forma_nombre, detalles: r.forma_detalles }
+          : null,
       };
     });
     return res.json(enriched);
@@ -545,34 +625,46 @@ router.put('/:id/status', async (req, res) => {
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
   const { estado } = req.body;
   const allowed = ['Pendiente', 'Enviado', 'Completado', 'Cancelado'];
-  if (!estado || !allowed.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
+  if (!estado || !allowed.includes(estado))
+    return res.status(400).json({ error: 'Estado inválido' });
   try {
     // Obtener pedido y bloquear
     const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
-    if (!pedidoRows || pedidoRows.length === 0) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!pedidoRows || pedidoRows.length === 0)
+      return res.status(404).json({ error: 'Pedido no encontrado' });
     const pedido = pedidoRows[0];
 
     const transitions = {
       Pendiente: ['Enviado', 'Completado', 'Cancelado'],
       Enviado: ['Completado', 'Cancelado'],
       Completado: [],
-      Cancelado: []
+      Cancelado: [],
     };
     if (pedido.estado === estado) return res.json({ success: true, estado });
-    if (!transitions[pedido.estado] || !transitions[pedido.estado].includes(estado)) return res.status(400).json({ error: `Transición inválida: ${pedido.estado} -> ${estado}` });
+    if (!transitions[pedido.estado] || !transitions[pedido.estado].includes(estado))
+      return res.status(400).json({ error: `Transición inválida: ${pedido.estado} -> ${estado}` });
 
     // Si se marca como Enviado, verificar que exista stock_comprometido suficiente por producto
     if (estado === 'Enviado') {
       const faltantes = [];
-      const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+      const lineas =
+        await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
       for (const linea of lineas) {
-        const sumRes = await sql`SELECT COALESCE(SUM(stock_comprometido),0) AS comprometido FROM inventario WHERE producto_id = ${linea.producto_id}`;
+        const sumRes =
+          await sql`SELECT COALESCE(SUM(stock_comprometido),0) AS comprometido FROM inventario WHERE producto_id = ${linea.producto_id}`;
         const comprometido = (sumRes && sumRes[0] && Number(sumRes[0].comprometido)) || 0;
         if (comprometido < Number(linea.cantidad)) {
-          faltantes.push({ producto_id: linea.producto_id, comprometido, requerido: Number(linea.cantidad) });
+          faltantes.push({
+            producto_id: linea.producto_id,
+            comprometido,
+            requerido: Number(linea.cantidad),
+          });
         }
       }
-      if (faltantes.length > 0) return res.status(400).json({ error: 'Stock comprometido insuficiente para enviar', faltantes });
+      if (faltantes.length > 0)
+        return res
+          .status(400)
+          .json({ error: 'Stock comprometido insuficiente para enviar', faltantes });
       await sql`UPDATE pedidos_venta SET estado = 'Enviado' WHERE id = ${pedidoId}`;
       return res.json({ success: true, estado: 'Enviado' });
     }
@@ -588,7 +680,8 @@ router.put('/:id/status', async (req, res) => {
       } catch (err) {
         if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
         if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
-        if (err.code === 'INSUFFICIENT_RESERVED') return res.status(400).json({ error: err.message });
+        if (err.code === 'INSUFFICIENT_RESERVED')
+          return res.status(400).json({ error: err.message });
         if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
         console.error(err);
         return res.status(500).json({ error: 'Error completando pedido' });
@@ -626,7 +719,8 @@ router.post('/:id/cancelar', async (req, res) => {
       return res.status(400).json({ error: 'No se puede cancelar un pedido ya completado' });
     }
 
-    const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+    const lineas =
+      await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
     const liberaciones = [];
     const warnings = [];
 
@@ -652,8 +746,14 @@ router.post('/:id/cancelar', async (req, res) => {
         const take = Math.min(committed, qtyToRelease);
         await sql`UPDATE inventario SET stock_comprometido = stock_comprometido - ${take} WHERE id = ${inv.id}`;
         // Registrar movimiento de inventario para auditoría (tipo 'entrada' indica liberación/retorno a disponible)
-        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id}, ${inv.almacen_id}, 'entrada', ${take}, ${'Liberación reserva pedido ' + pedidoId})`;
-        liberaciones.push({ producto_id: linea.producto_id, almacen_id: inv.almacen_id, cantidad: take });
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
+          linea.producto_id
+        }, ${inv.almacen_id}, 'entrada', ${take}, ${'Liberación reserva pedido ' + pedidoId})`;
+        liberaciones.push({
+          producto_id: linea.producto_id,
+          almacen_id: inv.almacen_id,
+          cantidad: take,
+        });
         releasedForLine += take;
         qtyToRelease -= take;
       }
@@ -663,7 +763,7 @@ router.post('/:id/cancelar', async (req, res) => {
       }
     }
     // Después de liberar, recalcular stock_comprometido por producto para evitar inconsistencias
-    const productosARecalcular = [...new Set(lineas.map(l => l.producto_id))];
+    const productosARecalcular = [...new Set(lineas.map((l) => l.producto_id))];
     const recalculations = [];
     for (const prodId of productosARecalcular) {
       // Expected comprometido = sum de cantidades en pedidos activos (Pendiente, Enviado)
@@ -685,7 +785,12 @@ router.post('/:id/cancelar', async (req, res) => {
       for (const inv of invs) totalAvailable += Number(inv.stock_fisico);
       const adjustments = [];
       if (invs.length === 0) {
-        recalculations.push({ producto_id: prodId, esperado, totalAvailable: 0, note: 'No hay inventario registrado para este producto' });
+        recalculations.push({
+          producto_id: prodId,
+          esperado,
+          totalAvailable: 0,
+          note: 'No hay inventario registrado para este producto',
+        });
         continue;
       }
       for (const inv of invs) {
@@ -702,7 +807,13 @@ router.post('/:id/cancelar', async (req, res) => {
         adjustments.push({ almacen_id: inv.almacen_id, id: inv.id, set_to: assign });
         remaining -= assign;
       }
-      recalculations.push({ producto_id: prodId, esperado, totalAvailable, adjustments, remaining_not_assigned: remaining });
+      recalculations.push({
+        producto_id: prodId,
+        esperado,
+        totalAvailable,
+        adjustments,
+        remaining_not_assigned: remaining,
+      });
     }
 
     // Finalmente marcar pedido como Cancelado
@@ -714,22 +825,42 @@ router.post('/:id/cancelar', async (req, res) => {
       const child = spawn(process.execPath, ['scripts/recalculate_comprometido.js', '--yes'], {
         cwd: process.cwd(),
         detached: true,
-        stdio: 'ignore'
+        stdio: 'ignore',
       });
       child.unref();
       // indicar en la respuesta que el recalculo fue programado
-      return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings, recalculations, recalculo_disparado: true });
+      return res.json({
+        success: true,
+        pedido_id: pedidoId,
+        estado: 'Cancelado',
+        reservasLiberadas: true,
+        liberaciones,
+        warnings,
+        recalculations,
+        recalculo_disparado: true,
+      });
     } catch (errSpawn) {
       // Si no se pudo disparar el proceso, devolver igualmente éxito pero con nota
       console.error('No se pudo disparar recalculo en background:', errSpawn);
-      return res.json({ success: true, pedido_id: pedidoId, estado: 'Cancelado', reservasLiberadas: true, liberaciones, warnings, recalculations, recalculo_disparado: false, recalculo_error: errSpawn.message });
+      return res.json({
+        success: true,
+        pedido_id: pedidoId,
+        estado: 'Cancelado',
+        reservasLiberadas: true,
+        liberaciones,
+        warnings,
+        recalculations,
+        recalculo_disparado: false,
+        recalculo_error: errSpawn.message,
+      });
     }
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch(e) {}
+    try {
+      await sql`ROLLBACK`;
+    } catch (e) {}
     console.error('Error cancelando pedido:', err);
     return res.status(500).json({ error: 'Error cancelando pedido', detail: err.message });
   }
 });
 
 module.exports = router;
-

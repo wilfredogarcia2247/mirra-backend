@@ -5,14 +5,12 @@ const app = require('../app');
 let authHeader = {};
 
 beforeAll(async () => {
-  await request(app)
-    .post('/api/auth/register')
-    .send({
-      nombre: 'Tester Bancos',
-      email: 'tester.bancos@example.com',
-      password: 'testpassword',
-      rol: 'admin'
-    });
+  await request(app).post('/api/auth/register').send({
+    nombre: 'Tester Bancos',
+    email: 'tester.bancos@example.com',
+    password: 'testpassword',
+    rol: 'admin',
+  });
   const loginRes = await request(app)
     .post('/api/auth/login')
     .send({ email: 'tester.bancos@example.com', password: 'testpassword' });
@@ -29,14 +27,21 @@ describe('Bancos formas de pago', () => {
     const formasRes = await request(app).get('/api/formas-pago').set(authHeader);
     expect(formasRes.statusCode).toBe(200);
     const formas = formasRes.body;
-    transferenciaId = (formas.find(f => f.nombre === 'Transferencia') || {}).id;
-    pagoMovilId = (formas.find(f => f.nombre === 'Pago Movil' || f.nombre === 'Pago Móvil') || {}).id;
+    transferenciaId = (formas.find((f) => f.nombre === 'Transferencia') || {}).id;
+    pagoMovilId = (formas.find((f) => f.nombre === 'Pago Movil' || f.nombre === 'Pago Móvil') || {})
+      .id;
     if (!transferenciaId) {
-      const r = await request(app).post('/api/formas-pago').set(authHeader).send({ nombre: 'Transferencia' });
+      const r = await request(app)
+        .post('/api/formas-pago')
+        .set(authHeader)
+        .send({ nombre: 'Transferencia' });
       transferenciaId = r.body.id;
     }
     if (!pagoMovilId) {
-      const r = await request(app).post('/api/formas-pago').set(authHeader).send({ nombre: 'Pago Movil' });
+      const r = await request(app)
+        .post('/api/formas-pago')
+        .set(authHeader)
+        .send({ nombre: 'Pago Movil' });
       pagoMovilId = r.body.id;
     }
   });
@@ -48,9 +53,15 @@ describe('Bancos formas de pago', () => {
       .send({
         nombre: 'Banco Test Valid',
         formas_pago: [
-          { forma_pago_id: transferenciaId, detalles: { numero_cuenta: '00011122233', documento: 'V-12345678' } },
-          { forma_pago_id: pagoMovilId, detalles: { numero_telefono: '04241234567', documento: 'V-12345678', operador: 'MOV' } }
-        ]
+          {
+            forma_pago_id: transferenciaId,
+            detalles: { numero_cuenta: '00011122233', documento: 'V-12345678' },
+          },
+          {
+            forma_pago_id: pagoMovilId,
+            detalles: { numero_telefono: '04241234567', documento: 'V-12345678', operador: 'MOV' },
+          },
+        ],
       });
     if (res.statusCode !== 201) console.error('RESP CREATE VALID:', res.statusCode, res.body);
     expect(res.statusCode).toBe(201);
@@ -59,7 +70,9 @@ describe('Bancos formas de pago', () => {
     if (res.body.formas_pago.length === 0) {
       // Puede ocurrir en entornos donde la tabla banco_formas_pago no fue creada por initNeonDB.
       // Aceptamos la respuesta 201 con arreglo vacío en ese caso.
-      console.warn('Banco creado pero no hay asociaciones (banco_formas_pago puede no existir en esta BD)');
+      console.warn(
+        'Banco creado pero no hay asociaciones (banco_formas_pago puede no existir en esta BD)'
+      );
     } else {
       expect(res.body.formas_pago.length).toBeGreaterThanOrEqual(2);
     }
@@ -71,9 +84,7 @@ describe('Bancos formas de pago', () => {
       .set(authHeader)
       .send({
         nombre: 'Banco Test Invalid',
-        formas_pago: [
-          { forma_pago_id: pagoMovilId, detalles: { documento: 'V-87654321' } }
-        ]
+        formas_pago: [{ forma_pago_id: pagoMovilId, detalles: { documento: 'V-87654321' } }],
       });
     if (res.statusCode !== 400) console.error('RESP CREATE INVALID:', res.statusCode, res.body);
     expect(res.statusCode).toBe(400);

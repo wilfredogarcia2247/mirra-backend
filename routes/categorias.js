@@ -5,7 +5,8 @@ const sql = neon(process.env.DATABASE_URL);
 
 function validarCategoria(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
-  if (body.descripcion != null && typeof body.descripcion !== 'string') return 'Descripcion inválida';
+  if (body.descripcion != null && typeof body.descripcion !== 'string')
+    return 'Descripcion inválida';
   return null;
 }
 
@@ -15,7 +16,7 @@ router.get('/', async (req, res) => {
     // Traer categorías y para cada una agregar productos que estén en almacenes de tipo 'venta'
     const cats = await sql`SELECT * FROM categorias ORDER BY nombre`;
     const categorias = [];
-    for (const c of (cats || [])) {
+    for (const c of cats || []) {
       const productos = await sql`
         SELECT p.id, p.nombre, p.precio_venta,
           COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
@@ -43,7 +44,9 @@ router.post('/', async (req, res) => {
   try {
     const { nombre, descripcion } = req.body;
     const inserted = await sql`
-      INSERT INTO categorias (nombre, descripcion) VALUES (${nombre}, ${descripcion || null}) RETURNING *
+      INSERT INTO categorias (nombre, descripcion) VALUES (${nombre}, ${
+      descripcion || null
+    }) RETURNING *
     `;
     res.status(201).json(inserted && inserted[0] ? inserted[0] : null);
   } catch (e) {
@@ -88,13 +91,16 @@ router.put('/:id', async (req, res) => {
   try {
     const { nombre, descripcion } = req.body;
     const updated = await sql`
-      UPDATE categorias SET nombre = ${nombre}, descripcion = ${descripcion || null} WHERE id = ${id} RETURNING *
+      UPDATE categorias SET nombre = ${nombre}, descripcion = ${
+      descripcion || null
+    } WHERE id = ${id} RETURNING *
     `;
     if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
     res.json(updated[0]);
   } catch (e) {
     console.error('Error actualizando categoria:', e);
-    if (e && e.code === '23505') return res.status(400).json({ error: 'Nombre de categoria ya en uso' });
+    if (e && e.code === '23505')
+      return res.status(400).json({ error: 'Nombre de categoria ya en uso' });
     res.status(500).json({ error: 'Error actualizando categoria' });
   }
 });
@@ -105,9 +111,11 @@ router.delete('/:id', async (req, res) => {
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
     // Verificar que no existan productos asociados
-    const prodCount = await sql`SELECT COUNT(*)::int AS c FROM productos WHERE categoria_id = ${id}`;
+    const prodCount =
+      await sql`SELECT COUNT(*)::int AS c FROM productos WHERE categoria_id = ${id}`;
     const c = prodCount && prodCount[0] ? Number(prodCount[0].c) : 0;
-    if (c > 0) return res.status(400).json({ error: 'No se puede eliminar: existen productos asociados' });
+    if (c > 0)
+      return res.status(400).json({ error: 'No se puede eliminar: existen productos asociados' });
 
     const deleted = await sql`DELETE FROM categorias WHERE id = ${id} RETURNING *`;
     if (!deleted || deleted.length === 0) return res.status(404).json({ error: 'No encontrado' });

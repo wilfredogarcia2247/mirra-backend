@@ -31,7 +31,8 @@ function validateDetallesByNombre(nombre, detalles) {
 
 function validarBanco(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
-  if (body.formas_pago && !Array.isArray(body.formas_pago)) return 'formas_pago debe ser un arreglo si se envía';
+  if (body.formas_pago && !Array.isArray(body.formas_pago))
+    return 'formas_pago debe ser un arreglo si se envía';
   if (body.moneda && typeof body.moneda !== 'string') return 'moneda inválida';
   return null;
 }
@@ -64,13 +65,15 @@ router.post('/', async (req, res) => {
   const error = validarBanco(req.body);
   if (error) return res.status(400).json({ error });
   try {
-  const { nombre, formas_pago, moneda } = req.body;
+    const { nombre, formas_pago, moneda } = req.body;
     // Validar formas_pago si vienen
     if (formas_pago && Array.isArray(formas_pago)) {
       for (const fp of formas_pago) {
-        if (!fp.forma_pago_id) return res.status(400).json({ error: 'forma_pago_id es requerido en formas_pago' });
+        if (!fp.forma_pago_id)
+          return res.status(400).json({ error: 'forma_pago_id es requerido en formas_pago' });
         const nombreForma = await getFormaNombre(fp.forma_pago_id);
-        if (!nombreForma) return res.status(400).json({ error: `Forma de pago id=${fp.forma_pago_id} no existe` });
+        if (!nombreForma)
+          return res.status(400).json({ error: `Forma de pago id=${fp.forma_pago_id} no existe` });
         const v = validateDetallesByNombre(nombreForma, fp.detalles);
         if (v) return res.status(400).json({ error: v });
       }
@@ -78,7 +81,9 @@ router.post('/', async (req, res) => {
     // Crear banco
     let banco;
     try {
-      const result = await sql`INSERT INTO bancos (nombre, moneda) VALUES (${nombre}, ${moneda || null}) RETURNING *`;
+      const result = await sql`INSERT INTO bancos (nombre, moneda) VALUES (${nombre}, ${
+        moneda || null
+      }) RETURNING *`;
       banco = result[0];
     } catch (e) {
       // Fallback para entornos donde la columna moneda no existe
@@ -109,7 +114,8 @@ router.post('/', async (req, res) => {
       }
     }
     try {
-      const formas = await sql`SELECT f.id, f.nombre, bf.detalles FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id WHERE bf.banco_id = ${banco.id}`;
+      const formas =
+        await sql`SELECT f.id, f.nombre, bf.detalles FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id WHERE bf.banco_id = ${banco.id}`;
       banco.formas_pago = formas || [];
     } catch (e) {
       banco.formas_pago = [];
@@ -129,7 +135,8 @@ router.get('/:id', async (req, res) => {
     const banco = rows[0];
     // Obtener las formas de pago y detalles asociados
     try {
-      const formas = await sql`SELECT f.id, f.nombre, bf.detalles FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id WHERE bf.banco_id = ${id}`;
+      const formas =
+        await sql`SELECT f.id, f.nombre, bf.detalles FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id WHERE bf.banco_id = ${id}`;
       banco.formas_pago = formas || [];
     } catch (e) {
       banco.formas_pago = [];
@@ -148,16 +155,19 @@ router.put('/:id', async (req, res) => {
   try {
     const { nombre, moneda } = req.body;
     const updated = await sql`UPDATE bancos SET nombre = ${nombre} WHERE id = ${id} RETURNING *`;
-    if (!updated || updated.length === 0) return res.status(404).json({ error: 'Banco no encontrado' });
+    if (!updated || updated.length === 0)
+      return res.status(404).json({ error: 'Banco no encontrado' });
     const banco = updated[0];
     // Si vienen formas de pago, validarlas y reemplazarlas (borramos y volvemos a insertar)
     const formas_pago = req.body.formas_pago;
     if (formas_pago && Array.isArray(formas_pago)) {
       // validar primero
       for (const fp of formas_pago) {
-        if (!fp.forma_pago_id) return res.status(400).json({ error: 'forma_pago_id es requerido en formas_pago' });
+        if (!fp.forma_pago_id)
+          return res.status(400).json({ error: 'forma_pago_id es requerido en formas_pago' });
         const nombreForma = await getFormaNombre(fp.forma_pago_id);
-        if (!nombreForma) return res.status(400).json({ error: `Forma de pago id=${fp.forma_pago_id} no existe` });
+        if (!nombreForma)
+          return res.status(400).json({ error: `Forma de pago id=${fp.forma_pago_id} no existe` });
         const v = validateDetallesByNombre(nombreForma, fp.detalles);
         if (v) return res.status(400).json({ error: v });
       }
@@ -176,7 +186,8 @@ router.put('/:id', async (req, res) => {
     }
     // Devolver con formas actualizadas
     try {
-      const formas = await sql`SELECT f.id, f.nombre, bf.detalles FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id WHERE bf.banco_id = ${id}`;
+      const formas =
+        await sql`SELECT f.id, f.nombre, bf.detalles FROM banco_formas_pago bf JOIN formas_pago f ON f.id = bf.forma_pago_id WHERE bf.banco_id = ${id}`;
       banco.formas_pago = formas || [];
     } catch (e) {
       banco.formas_pago = [];
@@ -201,17 +212,21 @@ router.delete('/:id', async (req, res) => {
   try {
     // Verificar uso en cliente_bancos (si la tabla existe)
     try {
-      const tbl = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cliente_bancos' LIMIT 1`;
+      const tbl =
+        await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cliente_bancos' LIMIT 1`;
       if (tbl && tbl.length > 0) {
-        const refs = await sql`SELECT COUNT(*)::int AS c FROM cliente_bancos WHERE banco_id = ${id}`;
+        const refs =
+          await sql`SELECT COUNT(*)::int AS c FROM cliente_bancos WHERE banco_id = ${id}`;
         const count = (refs && refs[0] && Number(refs[0].c)) || 0;
-        if (count > 0) return res.status(400).json({ error: 'No se puede eliminar: banco asociado a clientes' });
+        if (count > 0)
+          return res.status(400).json({ error: 'No se puede eliminar: banco asociado a clientes' });
       }
     } catch (e) {
       // Si la tabla no existe, permitir eliminación
     }
     const deleted = await sql`DELETE FROM bancos WHERE id = ${id} RETURNING *`;
-    if (!deleted || deleted.length === 0) return res.status(404).json({ error: 'Banco no encontrado' });
+    if (!deleted || deleted.length === 0)
+      return res.status(404).json({ error: 'Banco no encontrado' });
     res.json({ success: true, banco: deleted[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });

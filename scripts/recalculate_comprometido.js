@@ -27,7 +27,13 @@ async function recalcProduct(prodId) {
     if (invs.length === 0) {
       // nothing to adjust, but still commit
       await sql`COMMIT`;
-      return { producto_id: prodId, esperado, totalAvailable: 0, adjustments: [], note: 'No hay inventario para este producto' };
+      return {
+        producto_id: prodId,
+        esperado,
+        totalAvailable: 0,
+        adjustments: [],
+        note: 'No hay inventario para este producto',
+      };
     }
 
     for (const inv of invs) {
@@ -45,9 +51,17 @@ async function recalcProduct(prodId) {
     }
 
     await sql`COMMIT`;
-    return { producto_id: prodId, esperado, totalAvailable, adjustments, remaining_not_assigned: remaining };
+    return {
+      producto_id: prodId,
+      esperado,
+      totalAvailable,
+      adjustments,
+      remaining_not_assigned: remaining,
+    };
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch(e) {}
+    try {
+      await sql`ROLLBACK`;
+    } catch (e) {}
     throw err;
   }
 }
@@ -59,7 +73,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('Recalculando stock_comprometido para todos los productos (basado en pedidos Pendiente/Enviado)');
+  console.log(
+    'Recalculando stock_comprometido para todos los productos (basado en pedidos Pendiente/Enviado)'
+  );
   try {
     const prods = await sql`SELECT id FROM productos`;
     const results = [];
@@ -67,7 +83,11 @@ async function main() {
       try {
         const r = await recalcProduct(p.id);
         results.push(r);
-        console.log(`Producto ${p.id}: esperado=${r.esperado} disponible=${r.totalAvailable} remaining=${r.remaining_not_assigned || 0}`);
+        console.log(
+          `Producto ${p.id}: esperado=${r.esperado} disponible=${r.totalAvailable} remaining=${
+            r.remaining_not_assigned || 0
+          }`
+        );
       } catch (err) {
         console.error('Error recalculando producto', p.id, err.message);
         results.push({ producto_id: p.id, error: err.message });
@@ -75,7 +95,9 @@ async function main() {
     }
     console.log('Recalculo completado. Productos procesados:', results.length);
     // Summary counts
-    const warnings = results.filter(r => r.remaining_not_assigned && r.remaining_not_assigned > 0);
+    const warnings = results.filter(
+      (r) => r.remaining_not_assigned && r.remaining_not_assigned > 0
+    );
     console.log('Productos con falta de capacidad (remaining_not_assigned>0):', warnings.length);
     process.exit(0);
   } catch (err) {

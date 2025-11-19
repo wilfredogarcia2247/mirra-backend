@@ -3,7 +3,7 @@ require('dotenv').config();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
-(async function(){
+(async function () {
   try {
     // Reusar la lógica de producto ids del catálogo
     const prodIdRows = await sql`
@@ -12,7 +12,7 @@ const sql = neon(process.env.DATABASE_URL);
       JOIN almacenes a ON a.id = i.almacen_id
       WHERE a.es_materia_prima IS NOT TRUE AND (i.stock_fisico - i.stock_comprometido) > 0
     `;
-    const prodIds = (prodIdRows || []).map(r => r.id);
+    const prodIds = (prodIdRows || []).map((r) => r.id);
     if (prodIds.length === 0) {
       console.log('No hay productos visibles en el catálogo público');
       process.exit(0);

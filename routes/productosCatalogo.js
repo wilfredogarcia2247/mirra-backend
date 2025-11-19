@@ -56,7 +56,7 @@ router.get('/', async (req, res) => {
         `;
       }
     }
-    const prodIds = (prodIdRows || []).map(r => r.id);
+    const prodIds = (prodIdRows || []).map((r) => r.id);
     if (prodIds.length === 0) return res.json([]);
 
     const rows = await sql`
@@ -89,7 +89,7 @@ router.get('/', async (req, res) => {
       WHERE p.id = ANY(${prodIds})
     `;
     // Obtener fórmulas (ahora sirven como definición de tamaño) para los productos listados
-    const productIds = (rows || []).map(r => r.id);
+    const productIds = (rows || []).map((r) => r.id);
     let formulasRows = [];
     if (productIds.length > 0) {
       formulasRows = await sql`
@@ -100,7 +100,7 @@ router.get('/', async (req, res) => {
 
     // Agrupar 'tamaños' por producto usando las fórmulas
     const tamanosPorProducto = {};
-    (formulasRows || []).forEach(f => {
+    (formulasRows || []).forEach((f) => {
       const entry = {
         id: f.id, // id de la fórmula
         nombre: f.tamano_descripcion || null,
@@ -110,31 +110,38 @@ router.get('/', async (req, res) => {
         precio_venta: f.precio_venta != null ? Number(f.precio_venta) : null,
         factor_multiplicador_venta: null,
         precio_calculado: null,
-        costo_pedido: f.costo != null ? Number(f.costo) : null
+        costo_pedido: f.costo != null ? Number(f.costo) : null,
       };
       if (!tamanosPorProducto[f.producto_id]) tamanosPorProducto[f.producto_id] = [];
       tamanosPorProducto[f.producto_id].push(entry);
     });
 
-    const enriched = (rows || []).map(p => {
-      const inventario = (p.inventario && Array.isArray(p.inventario)) ? p.inventario.map(i => ({
-        id: i.id,
-        almacen_id: i.almacen_id,
-        almacen_nombre: i.almacen_nombre,
-        almacen_tipo: i.almacen_tipo,
-        stock_fisico: Number(i.stock_fisico),
-        stock_comprometido: Number(i.stock_comprometido),
-        stock_disponible: Number(i.stock_disponible)
-      })) : [];
-      const categoria = p.categoria_id ? {
-        id: p.categoria_id,
-        nombre: p.categoria_nombre || null,
-        descripcion: p.categoria_descripcion || null
-      } : null;
-      const marca = p.marca_id ? {
-        id: p.marca_id,
-        nombre: p.marca_nombre || null
-      } : null;
+    const enriched = (rows || []).map((p) => {
+      const inventario =
+        p.inventario && Array.isArray(p.inventario)
+          ? p.inventario.map((i) => ({
+              id: i.id,
+              almacen_id: i.almacen_id,
+              almacen_nombre: i.almacen_nombre,
+              almacen_tipo: i.almacen_tipo,
+              stock_fisico: Number(i.stock_fisico),
+              stock_comprometido: Number(i.stock_comprometido),
+              stock_disponible: Number(i.stock_disponible),
+            }))
+          : [];
+      const categoria = p.categoria_id
+        ? {
+            id: p.categoria_id,
+            nombre: p.categoria_nombre || null,
+            descripcion: p.categoria_descripcion || null,
+          }
+        : null;
+      const marca = p.marca_id
+        ? {
+            id: p.marca_id,
+            nombre: p.marca_nombre || null,
+          }
+        : null;
       return {
         id: p.id,
         nombre: p.nombre,
@@ -145,7 +152,7 @@ router.get('/', async (req, res) => {
         image_url: p.image_url,
         categoria,
         marca,
-        inventario
+        inventario,
       };
     });
     res.json(enriched);

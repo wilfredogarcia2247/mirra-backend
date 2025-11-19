@@ -44,7 +44,9 @@ async function reset() {
       console.log('Tablas recreadas correctamente.');
       process.exit(0);
     } catch (e) {
-      try { await sql`ROLLBACK`; } catch (e2) {}
+      try {
+        await sql`ROLLBACK`;
+      } catch (e2) {}
       throw e;
     }
   } catch (err) {

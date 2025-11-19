@@ -21,7 +21,8 @@ async function main() {
     }
 
     for (const p of perfumes) {
-      const inv = await sql`SELECT id, stock_fisico FROM inventario WHERE producto_id = ${p.id} AND almacen_id = ${almacenId} LIMIT 1`;
+      const inv =
+        await sql`SELECT id, stock_fisico FROM inventario WHERE producto_id = ${p.id} AND almacen_id = ${almacenId} LIMIT 1`;
       const desired = 20; // stock por defecto para catálogo
       if (!inv || inv.length === 0) {
         await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${p.id}, ${almacenId}, ${desired}, 0)`;

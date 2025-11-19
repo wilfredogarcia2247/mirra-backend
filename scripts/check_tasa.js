@@ -5,7 +5,7 @@ const app = require('../app');
 
 async function run() {
   const token = jwt.sign({ id: 1, rol: 'admin' }, process.env.JWT_SECRET || 'secret');
-  console.log('Usando token:', token.slice(0,20) + '...');
+  console.log('Usando token:', token.slice(0, 20) + '...');
   try {
     const res = await request(app)
       .post('/api/tasas-cambio')

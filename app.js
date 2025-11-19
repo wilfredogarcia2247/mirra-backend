@@ -21,7 +21,12 @@ app.use((req, res, next) => {
       }
     } catch (e) {}
 
-    const ip = (req.headers['x-forwarded-for'] || req.ip || (req.connection && req.connection.remoteAddress) || '-').toString();
+    const ip = (
+      req.headers['x-forwarded-for'] ||
+      req.ip ||
+      (req.connection && req.connection.remoteAddress) ||
+      '-'
+    ).toString();
     const time = new Date().toISOString();
     const method = req.method;
     const url = req.originalUrl || req.url;

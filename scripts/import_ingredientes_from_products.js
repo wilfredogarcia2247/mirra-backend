@@ -11,9 +11,14 @@ async function run() {
   // Permite --all o --ids=1,2,3
   const argv = process.argv.slice(2);
   const all = argv.includes('--all');
-  const idsArg = argv.find(a => a.startsWith('--ids='));
+  const idsArg = argv.find((a) => a.startsWith('--ids='));
   let ids = null;
-  if (idsArg) ids = idsArg.replace('--ids=', '').split(',').map(x => Number(x.trim())).filter(Boolean);
+  if (idsArg)
+    ids = idsArg
+      .replace('--ids=', '')
+      .split(',')
+      .map((x) => Number(x.trim()))
+      .filter(Boolean);
 
   try {
     let products = [];

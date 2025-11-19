@@ -3,35 +3,37 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
 async function initDB() {
-    // Verificar y crear tabla usuarios si no existe
-    await sql`CREATE TABLE IF NOT EXISTS usuarios (
+  // Verificar y crear tabla usuarios si no existe
+  await sql`CREATE TABLE IF NOT EXISTS usuarios (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
       email VARCHAR(100) UNIQUE,
       password VARCHAR(255),
       rol VARCHAR(20)
     );`;
-    await sql`CREATE TABLE IF NOT EXISTS usuarios (
+  await sql`CREATE TABLE IF NOT EXISTS usuarios (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
       email VARCHAR(100) UNIQUE,
       password VARCHAR(255),
       rol VARCHAR(20)
     );`;
-    await sql`INSERT INTO usuarios (nombre, email, password, rol) VALUES
+  await sql`INSERT INTO usuarios (nombre, email, password, rol) VALUES
       ('Administrador', 'admin@aromas.com', '$2a$10$adminhash', 'admin'),
       ('Empleado', 'empleado@aromas.com', '$2a$10$empleadohash', 'empleado')
       ON CONFLICT (email) DO NOTHING;`;
   // ALTER TABLE para agregar columnas si no existen
   // contactos table removed in this installation; no ALTERs applied
-    await sql`CREATE TABLE IF NOT EXISTS bancos (
+  await sql`CREATE TABLE IF NOT EXISTS bancos (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100)
     );`;
   // Asegurar columna para moneda en bancos
-  try { await sql`ALTER TABLE bancos ADD COLUMN moneda VARCHAR(10);`; } catch(e) {}
-    // cliente_bancos table removed - not created here
-    await sql`CREATE TABLE IF NOT EXISTS pagos (
+  try {
+    await sql`ALTER TABLE bancos ADD COLUMN moneda VARCHAR(10);`;
+  } catch (e) {}
+  // cliente_bancos table removed - not created here
+  await sql`CREATE TABLE IF NOT EXISTS pagos (
       id SERIAL PRIMARY KEY,
       pedido_venta_id INT,
       forma_pago_id INT,
@@ -39,17 +41,25 @@ async function initDB() {
       monto NUMERIC,
       fecha TIMESTAMP
     );`;
-    // Asegurar columnas adicionales para registros de pago
-    try { await sql`ALTER TABLE pagos ADD COLUMN referencia TEXT;`; } catch(e) {}
-    try { await sql`ALTER TABLE pagos ADD COLUMN fecha_transaccion TIMESTAMP;`; } catch(e) {}
-    // Asegurar columnas para tasa y símbolo en pagos
-    try { await sql`ALTER TABLE pagos ADD COLUMN tasa NUMERIC;`; } catch(e) {}
-    try { await sql`ALTER TABLE pagos ADD COLUMN tasa_simbolo VARCHAR(10);`; } catch(e) {}
-    await sql`INSERT INTO bancos (nombre) VALUES
+  // Asegurar columnas adicionales para registros de pago
+  try {
+    await sql`ALTER TABLE pagos ADD COLUMN referencia TEXT;`;
+  } catch (e) {}
+  try {
+    await sql`ALTER TABLE pagos ADD COLUMN fecha_transaccion TIMESTAMP;`;
+  } catch (e) {}
+  // Asegurar columnas para tasa y símbolo en pagos
+  try {
+    await sql`ALTER TABLE pagos ADD COLUMN tasa NUMERIC;`;
+  } catch (e) {}
+  try {
+    await sql`ALTER TABLE pagos ADD COLUMN tasa_simbolo VARCHAR(10);`;
+  } catch (e) {}
+  await sql`INSERT INTO bancos (nombre) VALUES
       ('Banco Uno'),
       ('Banco Dos')
       ON CONFLICT DO NOTHING;`;
-    // cliente_bancos table removed in this installation: no seed inserted
+  // cliente_bancos table removed in this installation: no seed inserted
   try {
     // Crear tablas (una por una)
     await sql`CREATE TABLE IF NOT EXISTS productos (
@@ -77,12 +87,22 @@ async function initDB() {
     // y formatos ahora se representan mediante filas en `formulas` (compatibilidad).
     // No se crea la tabla `tamanos` aquí para evitar inconsistencias entre instalaciones.
     // Asegurar columnas de relación en productos (categoria_id, marca_id)
-    try { await sql`ALTER TABLE productos ADD COLUMN categoria_id INT`; } catch(e) {}
-    try { await sql`ALTER TABLE productos ADD COLUMN marca_id INT`; } catch(e) {}
-    try { await sql`ALTER TABLE productos ADD CONSTRAINT fk_productos_categoria FOREIGN KEY (categoria_id) REFERENCES categorias(id) ON DELETE SET NULL`; } catch(e) {}
-    try { await sql`ALTER TABLE productos ADD CONSTRAINT fk_productos_marca FOREIGN KEY (marca_id) REFERENCES marcas(id) ON DELETE SET NULL`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE productos ADD COLUMN categoria_id INT`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE productos ADD COLUMN marca_id INT`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE productos ADD CONSTRAINT fk_productos_categoria FOREIGN KEY (categoria_id) REFERENCES categorias(id) ON DELETE SET NULL`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE productos ADD CONSTRAINT fk_productos_marca FOREIGN KEY (marca_id) REFERENCES marcas(id) ON DELETE SET NULL`;
+    } catch (e) {}
     // Asegurar la columna image_url en productos (migración segura)
-    try { await sql`ALTER TABLE productos ADD COLUMN image_url TEXT;`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE productos ADD COLUMN image_url TEXT;`;
+    } catch (e) {}
     await sql`CREATE TABLE IF NOT EXISTS almacenes (
       id SERIAL PRIMARY KEY,
       nombre VARCHAR(100),
@@ -91,20 +111,34 @@ async function initDB() {
       responsable VARCHAR(100)
     );`;
     // Asegurar columnas en caso de migracion previa
-    try { await sql`ALTER TABLE almacenes ADD COLUMN ubicacion VARCHAR(200);`; } catch(e) {}
-    try { await sql`ALTER TABLE almacenes ADD COLUMN responsable VARCHAR(100);`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE almacenes ADD COLUMN ubicacion VARCHAR(200);`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE almacenes ADD COLUMN responsable VARCHAR(100);`;
+    } catch (e) {}
     // Asegurar columna es_materia_prima para indicar si el almacén es de materia prima (boolean)
-    try { await sql`ALTER TABLE almacenes ADD COLUMN es_materia_prima BOOLEAN DEFAULT FALSE;`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE almacenes ADD COLUMN es_materia_prima BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
     await sql`CREATE TABLE IF NOT EXISTS formulas (
       id SERIAL PRIMARY KEY,
       producto_terminado_id INT
     );`;
     // Asegurar columnas en formulas: tamano_id (legacy, puede ser NULL), nombre (descripción del tamaño), costo y precio_venta
-    try { await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS tamano_id INT`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS tamano_id INT`;
+    } catch (e) {}
     // No se crea FK hacia `tamanos` en instalaciones donde la tabla fue eliminada
-    try { await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS nombre VARCHAR(200);`; } catch(e) {}
-    try { await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS costo NUMERIC;`; } catch(e) {}
-    try { await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS nombre VARCHAR(200);`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS costo NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
+    } catch (e) {}
     await sql`CREATE TABLE IF NOT EXISTS formula_componentes (
       id SERIAL PRIMARY KEY,
       formula_id INT,
@@ -152,7 +186,9 @@ async function initDB() {
       precio_venta_final NUMERIC(14,4) DEFAULT 0,
       actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );`;
-    try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_precio_prod_tamano ON precio_productos (producto_id, tamano_id);`; } catch(e) {}
+    try {
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_precio_prod_tamano ON precio_productos (producto_id, tamano_id);`;
+    } catch (e) {}
     // Tabla para tasas de cambio
     await sql`CREATE TABLE IF NOT EXISTS tasas_cambio (
       id SERIAL PRIMARY KEY,
@@ -163,8 +199,12 @@ async function initDB() {
       actualizado_en TIMESTAMP
     );`;
     // Asegurar columna activo y un índice parcial único para que sólo una tasa pueda estar activa
-    try { await sql`ALTER TABLE tasas_cambio ADD COLUMN activo BOOLEAN DEFAULT FALSE;`; } catch(e) {}
-    try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasas_cambio_activo_true ON tasas_cambio (activo) WHERE activo = TRUE;`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE tasas_cambio ADD COLUMN activo BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
+    try {
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasas_cambio_activo_true ON tasas_cambio (activo) WHERE activo = TRUE;`;
+    } catch (e) {}
     // Tabla de movimientos de inventario para auditoría
     await sql`CREATE TABLE IF NOT EXISTS inventario_movimientos (
       id SERIAL PRIMARY KEY,
@@ -188,17 +228,33 @@ async function initDB() {
       fecha TIMESTAMP
     );`;
     // Asegurar columnas adicionales para pedidos_venta (migración segura)
-    try { await sql`ALTER TABLE pedidos_venta ADD COLUMN nombre_cliente TEXT;`; } catch(e) {}
-    try { await sql`ALTER TABLE pedidos_venta ADD COLUMN telefono TEXT;`; } catch(e) {}
-    try { await sql`ALTER TABLE pedidos_venta ADD COLUMN cedula TEXT;`; } catch(e) {}
-    try { await sql`ALTER TABLE pedidos_venta ADD COLUMN origen_ip TEXT;`; } catch(e) {}
-    try { await sql`ALTER TABLE pedidos_venta ADD COLUMN user_agent TEXT;`; } catch(e) {}
-  // Agregar columna para snapshot del valor de la tasa de cambio en pedidos_venta
-  // Solo almacenamos el monto (decimal) de la tasa en el momento del pedido
-  try { await sql`ALTER TABLE pedidos_venta ADD COLUMN tasa_cambio_monto NUMERIC;`; } catch(e) {}
-  // Remover columnas previas si existen (tasa_cambio_id, tasa_cambio_simbolo) — ahora no las usamos
-  try { await sql`ALTER TABLE pedidos_venta DROP COLUMN IF EXISTS tasa_cambio_id;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedidos_venta DROP COLUMN IF EXISTS tasa_cambio_simbolo;`; } catch(e) {}
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN nombre_cliente TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN telefono TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN cedula TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN origen_ip TEXT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN user_agent TEXT;`;
+    } catch (e) {}
+    // Agregar columna para snapshot del valor de la tasa de cambio en pedidos_venta
+    // Solo almacenamos el monto (decimal) de la tasa en el momento del pedido
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN tasa_cambio_monto NUMERIC;`;
+    } catch (e) {}
+    // Remover columnas previas si existen (tasa_cambio_id, tasa_cambio_simbolo) — ahora no las usamos
+    try {
+      await sql`ALTER TABLE pedidos_venta DROP COLUMN IF EXISTS tasa_cambio_id;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedidos_venta DROP COLUMN IF EXISTS tasa_cambio_simbolo;`;
+    } catch (e) {}
     await sql`CREATE TABLE IF NOT EXISTS pedido_venta_productos (
       id SERIAL PRIMARY KEY,
       pedido_venta_id INT,
@@ -206,11 +262,19 @@ async function initDB() {
       cantidad INT
     );`;
     // Asegurar columnas para snapshot de precio y costo en líneas de pedido (migración segura)
-  // Remove legacy column precio_unitario if present
-  try { await sql`ALTER TABLE pedido_venta_productos DROP COLUMN IF EXISTS precio_unitario;`; } catch(e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`; } catch(e) {}
-  try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`; } catch(e) {}
+    // Remove legacy column precio_unitario if present
+    try {
+      await sql`ALTER TABLE pedido_venta_productos DROP COLUMN IF EXISTS precio_unitario;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
+    } catch (e) {}
     // Semillas básicas para productos (sin proveedor)
     await sql`INSERT INTO productos (nombre, unidad, stock, costo) VALUES
       ('Esencia de Jazmín', 'ml', 1000, 0.5),
@@ -233,17 +297,17 @@ async function initDB() {
     // Asegurar que exista al menos un almacén de cada tipo (compatibilidad con tests)
     try {
       await sql`INSERT INTO almacenes (nombre, tipo) SELECT 'Almacén de Venta', 'venta' WHERE NOT EXISTS (SELECT 1 FROM almacenes WHERE tipo = 'venta')`;
-    } catch(e) {}
+    } catch (e) {}
     try {
       await sql`INSERT INTO almacenes (nombre, tipo) SELECT 'Almacén Interno', 'interno' WHERE NOT EXISTS (SELECT 1 FROM almacenes WHERE tipo = 'interno')`;
-    } catch(e) {}
+    } catch (e) {}
     // Normalizar valores históricos: convertir 'Venta' -> 'venta' y 'MateriaPrima' -> 'interno'
     try {
       await sql`UPDATE almacenes SET tipo = 'venta' WHERE tipo ILIKE 'venta' OR tipo = 'Venta'`;
-    } catch(e) {}
+    } catch (e) {}
     try {
       await sql`UPDATE almacenes SET tipo = 'interno' WHERE tipo ILIKE 'materia%' OR tipo = 'MateriaPrima' OR tipo = 'Interno'`;
-    } catch(e) {}
+    } catch (e) {}
 
     await sql`INSERT INTO formulas (producto_terminado_id) VALUES (7)
       ON CONFLICT DO NOTHING;`;
@@ -267,7 +331,7 @@ async function initDB() {
     // Asegurar existencia de la forma 'Pago Movil' y crear tabla de relación banco -> formas_pago
     try {
       await sql`INSERT INTO formas_pago (nombre) SELECT 'Pago Movil' WHERE NOT EXISTS (SELECT 1 FROM formas_pago WHERE nombre = 'Pago Movil')`;
-    } catch(e) {}
+    } catch (e) {}
 
     // Tabla que asocia bancos con formas de pago y guarda detalles (json) por banco
     await sql`CREATE TABLE IF NOT EXISTS banco_formas_pago (

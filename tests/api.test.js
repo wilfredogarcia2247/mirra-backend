@@ -1,26 +1,21 @@
 const request = require('supertest');
 const app = require('../app');
 
-
 let authHeader = {};
 
 beforeAll(async () => {
   // Registrar el usuario antes de login (ignorar si ya existe)
-  await request(app)
-    .post('/api/auth/register')
-    .send({
-      nombre: 'Leonardo',
-      email: 'urdaneta.leonardo92@gmail.com',
-      password: '8121230219',
-      rol: 'admin'
-    });
+  await request(app).post('/api/auth/register').send({
+    nombre: 'Leonardo',
+    email: 'urdaneta.leonardo92@gmail.com',
+    password: '8121230219',
+    rol: 'admin',
+  });
   // Login con el usuario admin creado en la semilla
-    const loginRes = await request(app)
-      .post('/api/auth/login')
-      .send({
-        email: 'urdaneta.leonardo92@gmail.com',
-        password: '8121230219'
-      });
+  const loginRes = await request(app).post('/api/auth/login').send({
+    email: 'urdaneta.leonardo92@gmail.com',
+    password: '8121230219',
+  });
   expect(loginRes.statusCode).toBe(200);
   const token = loginRes.body.token;
   authHeader = { Authorization: `Bearer ${token}` };
@@ -34,16 +29,13 @@ describe('API Endpoints', () => {
   });
 
   test('POST /api/productos', async () => {
-    const res = await request(app)
-      .post('/api/productos')
-      .set(authHeader)
-      .send({
-        nombre: 'Test Producto',
-        unidad: 'ml',
-        stock: 100,
-        costo: 1,
-        precio_venta: 2
-      });
+    const res = await request(app).post('/api/productos').set(authHeader).send({
+      nombre: 'Test Producto',
+      unidad: 'ml',
+      stock: 100,
+      costo: 1,
+      precio_venta: 2,
+    });
     expect(res.statusCode).toBe(201);
     expect(res.body.nombre).toBe('Test Producto');
   });

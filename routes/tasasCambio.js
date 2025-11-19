@@ -31,8 +31,10 @@ router.get('/:id', async (req, res) => {
 // Crear una tasa
 router.post('/', async (req, res) => {
   const { monto, simbolo, descripcion } = req.body;
-  if (monto == null || isNaN(Number(monto)) || Number(monto) <= 0) return res.status(400).json({ error: 'Monto inválido' });
-  if (!simbolo || typeof simbolo !== 'string' || simbolo.trim() === '') return res.status(400).json({ error: 'Símbolo requerido' });
+  if (monto == null || isNaN(Number(monto)) || Number(monto) <= 0)
+    return res.status(400).json({ error: 'Monto inválido' });
+  if (!simbolo || typeof simbolo !== 'string' || simbolo.trim() === '')
+    return res.status(400).json({ error: 'Símbolo requerido' });
   try {
     const activo = req.body.activo === true;
     if (activo) {
@@ -42,22 +44,30 @@ router.post('/', async (req, res) => {
         await sql`UPDATE tasas_cambio SET activo = FALSE WHERE activo = TRUE`;
         const created = await sql`
           INSERT INTO tasas_cambio (monto, simbolo, descripcion, creado_en, activo)
-          VALUES (${Number(monto)}, ${simbolo.trim()}, ${descripcion || null}, NOW(), TRUE) RETURNING *
+          VALUES (${Number(monto)}, ${simbolo.trim()}, ${
+          descripcion || null
+        }, NOW(), TRUE) RETURNING *
         `;
         await sql`COMMIT`;
         return res.status(201).json(created[0]);
       } catch (e) {
-        try { await sql`ROLLBACK`; } catch (er) {}
+        try {
+          await sql`ROLLBACK`;
+        } catch (er) {}
         // If another concurrent request created the active rate, return that existing active row
         const msg = e && e.message ? e.message : '';
         if (msg.includes('idx_tasas_cambio_activo_true') || msg.includes('unique')) {
           try {
-            const existing = await sql`SELECT * FROM tasas_cambio WHERE simbolo = ${simbolo.trim()} AND activo = TRUE ORDER BY id DESC`;
+            const existing =
+              await sql`SELECT * FROM tasas_cambio WHERE simbolo = ${simbolo.trim()} AND activo = TRUE ORDER BY id DESC`;
             if (existing && existing.length > 0) {
               return res.status(200).json(existing[0]);
             }
           } catch (fetchErr) {
-            console.error('Error fetching existing active tasa after unique conflict:', fetchErr && fetchErr.message ? fetchErr.message : fetchErr);
+            console.error(
+              'Error fetching existing active tasa after unique conflict:',
+              fetchErr && fetchErr.message ? fetchErr.message : fetchErr
+            );
           }
         }
         throw e;
@@ -65,7 +75,9 @@ router.post('/', async (req, res) => {
     } else {
       const created = await sql`
         INSERT INTO tasas_cambio (monto, simbolo, descripcion, creado_en, activo)
-        VALUES (${Number(monto)}, ${simbolo.trim()}, ${descripcion || null}, NOW(), FALSE) RETURNING *
+        VALUES (${Number(monto)}, ${simbolo.trim()}, ${
+        descripcion || null
+      }, NOW(), FALSE) RETURNING *
       `;
       return res.status(201).json(created[0]);
     }
@@ -81,8 +93,10 @@ router.put('/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   const { monto, simbolo, descripcion } = req.body;
-  if (monto != null && (isNaN(Number(monto)) || Number(monto) <= 0)) return res.status(400).json({ error: 'Monto inválido' });
-  if (simbolo != null && (typeof simbolo !== 'string' || simbolo.trim() === '')) return res.status(400).json({ error: 'Símbolo inválido' });
+  if (monto != null && (isNaN(Number(monto)) || Number(monto) <= 0))
+    return res.status(400).json({ error: 'Monto inválido' });
+  if (simbolo != null && (typeof simbolo !== 'string' || simbolo.trim() === ''))
+    return res.status(400).json({ error: 'Símbolo inválido' });
   try {
     const activo = req.body.activo;
     // Si se solicita activar esta tasa, desactivar otras en transacción
@@ -103,7 +117,9 @@ router.put('/:id', async (req, res) => {
         await sql`COMMIT`;
         return res.json(updated[0]);
       } catch (e) {
-        try { await sql`ROLLBACK`; } catch (er) {}
+        try {
+          await sql`ROLLBACK`;
+        } catch (er) {}
         throw e;
       }
     } else if (activo === false) {
@@ -129,7 +145,9 @@ router.put('/:id', async (req, res) => {
     }
   } catch (err) {
     console.error('Error actualizando tasa:', err && err.message ? err.message : err);
-    return res.status(500).json({ error: err && err.message ? err.message : 'Error actualizando tasa' });
+    return res
+      .status(500)
+      .json({ error: err && err.message ? err.message : 'Error actualizando tasa' });
   }
 });
 
@@ -143,7 +161,9 @@ router.delete('/:id', async (req, res) => {
     return res.json({ success: true, deleted: deleted[0] });
   } catch (err) {
     console.error('Error eliminando tasa:', err && err.message ? err.message : err);
-    return res.status(500).json({ error: err && err.message ? err.message : 'Error eliminando tasa' });
+    return res
+      .status(500)
+      .json({ error: err && err.message ? err.message : 'Error eliminando tasa' });
   }
 });
 

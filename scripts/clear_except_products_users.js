@@ -4,10 +4,14 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
 async function main() {
-  console.log('Script de vaciado selectivo: mantiene tablas `productos` y `usuarios` y reinicia pedidos/inventarios.');
+  console.log(
+    'Script de vaciado selectivo: mantiene tablas `productos` y `usuarios` y reinicia pedidos/inventarios.'
+  );
   const force = process.env.FORCE_CLEAR === 'true' || process.argv.includes('--yes');
   if (!force) {
-    console.log('Precaución: este script borrará datos. Para ejecutar exporta FORCE_CLEAR=true o pasa --yes. Ej: FORCE_CLEAR=true node scripts/clear_except_products_users.js');
+    console.log(
+      'Precaución: este script borrará datos. Para ejecutar exporta FORCE_CLEAR=true o pasa --yes. Ej: FORCE_CLEAR=true node scripts/clear_except_products_users.js'
+    );
     process.exit(1);
   }
 
@@ -16,17 +20,22 @@ async function main() {
 
     // Truncar sólo las tablas que existan en esta instalación (evita fallos si algunas tablas fueron eliminadas)
     const candidateTables = [
-      'pedido_venta_productos', 'pedidos_venta',
-      'pedido_compra_productos', 'pedidos_compra',
-      'inventario_movimientos', 'ordenes_produccion', 'pagos', 'tasas_cambio'
+      'pedido_venta_productos',
+      'pedidos_venta',
+      'pedido_compra_productos',
+      'pedidos_compra',
+      'inventario_movimientos',
+      'ordenes_produccion',
+      'pagos',
+      'tasas_cambio',
     ];
     const existing = await sql`
       SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY(${candidateTables});
     `;
-    const names = (existing || []).map(r => r.table_name).filter(Boolean);
+    const names = (existing || []).map((r) => r.table_name).filter(Boolean);
     if (names.length > 0) {
       // Construir dinámicamente la sentencia TRUNCATE para las tablas existentes
-      const q = names.map(n => '"' + n + '"').join(', ');
+      const q = names.map((n) => '"' + n + '"').join(', ');
       await sql.raw(`TRUNCATE TABLE ${q} RESTART IDENTITY CASCADE`);
     }
 
@@ -34,12 +43,14 @@ async function main() {
     await sql`UPDATE inventario SET stock_fisico = 0, stock_comprometido = 0;`;
 
     // Recalcular inventario inicial: asignar el stock declarado en productos.stock al primer almacén de tipo 'Venta'
-    const ventaAlmacen = await sql`SELECT id FROM almacenes WHERE tipo IN ('venta','interno') ORDER BY CASE WHEN tipo = 'venta' THEN 0 ELSE 1 END LIMIT 1`;
+    const ventaAlmacen =
+      await sql`SELECT id FROM almacenes WHERE tipo IN ('venta','interno') ORDER BY CASE WHEN tipo = 'venta' THEN 0 ELSE 1 END LIMIT 1`;
     let ventaAlmacenId = null;
     if (ventaAlmacen && ventaAlmacen.length > 0) ventaAlmacenId = ventaAlmacen[0].id;
     if (!ventaAlmacenId) {
       console.log('No se encontró almacén de tipo venta o interno. Creando uno por defecto.');
-      const created = await sql`INSERT INTO almacenes (nombre, tipo) VALUES ('Almacén de Venta', 'venta') RETURNING id`;
+      const created =
+        await sql`INSERT INTO almacenes (nombre, tipo) VALUES ('Almacén de Venta', 'venta') RETURNING id`;
       ventaAlmacenId = created[0].id;
     }
 
@@ -48,7 +59,8 @@ async function main() {
     for (const prod of productos) {
       const prodId = prod.id;
       const stock = Number(prod.stock) || 0;
-      const existing = await sql`SELECT id FROM inventario WHERE producto_id = ${prodId} AND almacen_id = ${ventaAlmacenId}`;
+      const existing =
+        await sql`SELECT id FROM inventario WHERE producto_id = ${prodId} AND almacen_id = ${ventaAlmacenId}`;
       if (existing && existing.length > 0) {
         await sql`UPDATE inventario SET stock_fisico = ${stock}, stock_comprometido = 0 WHERE id = ${existing[0].id}`;
       } else {
@@ -61,7 +73,9 @@ async function main() {
     await sql`COMMIT`;
     console.log('Vaciado selectivo completado. Tablas truncadas y inventario reseteado.');
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    try {
+      await sql`ROLLBACK`;
+    } catch (e) {}
     console.error('Error ejecutando vaciado selectivo:', err);
     process.exit(2);
   }

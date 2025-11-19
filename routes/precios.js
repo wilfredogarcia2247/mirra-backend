@@ -9,7 +9,8 @@ router.get('/', async (req, res) => {
   try {
     let q = sql`SELECT * FROM precio_productos`;
     if (producto_id && tamano_id) {
-      q = await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id} AND tamano_id = ${tamano_id}`;
+      q =
+        await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id} AND tamano_id = ${tamano_id}`;
       return res.json(q);
     }
     if (producto_id) {
@@ -30,7 +31,8 @@ router.get('/', async (req, res) => {
 router.get('/:producto_id/:tamano_id', async (req, res) => {
   const { producto_id, tamano_id } = req.params;
   try {
-    const row = await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id} AND tamano_id = ${tamano_id} LIMIT 1`;
+    const row =
+      await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id} AND tamano_id = ${tamano_id} LIMIT 1`;
     if (!row || row.length === 0) return res.status(404).json({ error: 'No encontrado' });
     res.json(row[0]);
   } catch (err) {
