@@ -13,38 +13,9 @@ async function seed() {
       // no fatal; seguimos
       console.warn('Warning: no se pudo setear secuencia de productos:', e.message || e);
     }
-    const perfumes = [
-      {
-        nombre: 'Perfume Citrus Breeze',
-        marca: 'Aromas',
-        categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.4, precio_venta: 12.0 },
-          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 0.7, precio_venta: 20.0 },
-          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 1.2, precio_venta: 36.0 }
-        ]
-      },
-      {
-        nombre: 'Perfume Floral Garden',
-        marca: 'Aromas',
-        categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.45, precio_venta: 13.0 },
-          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 0.8, precio_venta: 22.0 },
-          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 1.5, precio_venta: 40.0 }
-        ]
-      },
-      {
-        nombre: 'Perfume Oriental Night',
-        marca: 'Aromas',
-        categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.6, precio_venta: 15.0 },
-          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.0, precio_venta: 26.0 },
-          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 1.9, precio_venta: 48.0 }
-        ]
-      }
-    ];
+      // Archivo deshabilitado: seed_perfumes_with_tamanos.js
+      // Dependía de `tamanos` (eliminada). Conservado como stub.
+      console.log('seed_perfumes_with_tamanos.js: script deshabilitado (tamanos eliminado)');
 
     // Añadir más perfumes de ejemplo
     const extraPerfumes = [
@@ -52,38 +23,21 @@ async function seed() {
         nombre: 'Aqua Marine Essence',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '15ml', cantidad: 15, unidad: 'ml', costo: 0.25, precio_venta: 8.0 },
-          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.45, precio_venta: 15.0 },
-          { nombre: '75ml', cantidad: 75, unidad: 'ml', costo: 1.0, precio_venta: 32.0 }
-        ]
       },
       {
         nombre: 'Woody Musk',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.6, precio_venta: 14.0 },
-          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.0, precio_venta: 25.0 }
-        ]
       },
       {
         nombre: 'Vanilla Bloom',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '30ml', cantidad: 30, unidad: 'ml', costo: 0.5, precio_venta: 13.0 },
-          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 2.0, precio_venta: 50.0 }
-        ]
       },
       {
         nombre: 'Citrus Oud',
         marca: 'Aromas',
         categoria: 'Perfumes',
-        tamanos: [
-          { nombre: '50ml', cantidad: 50, unidad: 'ml', costo: 1.2, precio_venta: 28.0 },
-          { nombre: '100ml', cantidad: 100, unidad: 'ml', costo: 2.4, precio_venta: 55.0 }
-        ]
       }
     ];
 

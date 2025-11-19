@@ -93,8 +93,7 @@ app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 // Marcas
 app.use('/api/marcas', authMiddleware, require('./routes/marcas'));
-// Tamaños (formatos / presentaciones)
-app.use('/api/tamanos', authMiddleware, require('./routes/tamanos'));
+// Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
