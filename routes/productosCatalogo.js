@@ -154,7 +154,10 @@ router.get('/', async (req, res) => {
         marca,
         inventario,
       };
-    });
+    })
+      // Filtrar solo productos que tengan al menos una fórmula (presentación/tamaño)
+      .filter((prod) => Array.isArray(prod.tamanos) && prod.tamanos.length > 0);
+
     res.json(enriched);
   } catch (err) {
     console.error('Error en /api/productos/catalogo', err);
