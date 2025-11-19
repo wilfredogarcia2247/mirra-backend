@@ -10,6 +10,7 @@ function validarPedido(body) {
   for (const p of body.productos) {
     if (!p.producto_id || isNaN(Number(p.producto_id))) return 'ID de producto requerido';
     if (!p.cantidad || isNaN(Number(p.cantidad))) return 'Cantidad requerida';
+    if (p.formula_id != null && isNaN(Number(p.formula_id))) return 'formula_id inválido en productos';
   }
   if (!body.estado || !['Pendiente', 'Enviado', 'Completado'].includes(body.estado))
     return 'Estado inválido';
@@ -40,7 +41,7 @@ function validarPagoObj(pago) {
 
 router.get('/', async (req, res) => {
   try {
-    // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
+    // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó en este entorno
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
     } catch (e) {}
@@ -50,14 +51,25 @@ router.get('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
     } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
+    } catch (e) {}
     const pedidos = await sql`SELECT * FROM pedidos_venta`;
     const pedidosConDetalle = [];
     for (const p of pedidos) {
       const productos = await sql`
-         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
-           COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre, COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta, COALESCE(pv.costo_unitario, prod.costo) AS costo, prod.image_url
+         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+           COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+           COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+           COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+           COALESCE(pv.costo_unitario, prod.costo) AS costo,
+           prod.image_url
          FROM pedido_venta_productos pv
          LEFT JOIN productos prod ON prod.id = pv.producto_id
+         LEFT JOIN formulas f ON f.id = pv.formula_id
          WHERE pv.pedido_venta_id = ${p.id}
       `;
       // Normalizar tipos y calcular subtotales
@@ -72,6 +84,8 @@ router.get('/', async (req, res) => {
           id: item.id,
           pedido_venta_id: item.pedido_venta_id,
           producto_id: item.producto_id,
+          formula_id: item.formula_id || null,
+          formula_nombre: item.formula_nombre || null,
           cantidad,
           producto_nombre: item.producto_nombre,
           precio_venta: isNaN(precio) ? null : precio,
@@ -117,20 +131,34 @@ router.post('/', async (req, res) => {
           await sql`ROLLBACK`;
           return res.status(400).json({ error: 'Cantidad inválida en productos' });
         }
-        // Obtener snapshot de producto al momento del pedido (precio, costo, nombre)
+        // Obtener snapshot: preferir fórmula si se provee, sino datos del producto
         let precioUnitario = null;
         let costoUnitario = null;
         let nombreProducto = null;
-        const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
-        if (prodRow && prodRow[0]) {
-          precioUnitario = prodRow[0].precio_venta != null ? prodRow[0].precio_venta : null;
-          costoUnitario = prodRow[0].costo != null ? prodRow[0].costo : null;
-          nombreProducto = prodRow[0].nombre != null ? prodRow[0].nombre : null;
+        let formulaIdToSave = null;
+        let formulaNombreToSave = null;
+        if (p.formula_id != null) {
+          const fRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.formula_id} LIMIT 1`;
+          if (fRow && fRow[0]) {
+            precioUnitario = fRow[0].precio_venta != null ? fRow[0].precio_venta : null;
+            costoUnitario = fRow[0].costo != null ? fRow[0].costo : null;
+            nombreProducto = fRow[0].nombre != null ? fRow[0].nombre : null;
+            formulaIdToSave = Number(p.formula_id);
+            formulaNombreToSave = fRow[0].nombre != null ? fRow[0].nombre : null;
+          }
+        }
+        if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
+          const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id} LIMIT 1`;
+          if (prodRow && prodRow[0]) {
+            precioUnitario = precioUnitario == null ? prodRow[0].precio_venta : precioUnitario;
+            costoUnitario = costoUnitario == null ? prodRow[0].costo : costoUnitario;
+            nombreProducto = nombreProducto == null ? prodRow[0].nombre : nombreProducto;
+          }
         }
 
         await sql`
-          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto)
-          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})
+          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre)
+          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave})
         `;
       }
 
