@@ -151,9 +151,19 @@ router.post('/', async (req, res) => {
           subtotal,
         };
       });
-      // Añadir nombres de componentes si la línea tiene formula_id guardada
+      // Añadir nombres de componentes si la línea tiene formula_id guardada o se puede resolver por nombre
       for (const prodItem of productosMapeados) {
-        if (prodItem.formula_id) {
+        prodItem.componentes = prodItem.componentes || [];
+        let formulaIdToUse = prodItem.formula_id || null;
+        if (!formulaIdToUse && prodItem.producto_nombre) {
+          try {
+            const frow = await sql`
+              SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre = ${prodItem.producto_nombre} LIMIT 1
+            `;
+            if (frow && frow[0] && frow[0].id) formulaIdToUse = frow[0].id;
+          } catch (e) {}
+        }
+        if (formulaIdToUse) {
           try {
             const comps = await sql`
               SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
@@ -161,7 +171,7 @@ router.post('/', async (req, res) => {
               FROM formula_componentes fc
               LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
               LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-              WHERE fc.formula_id = ${prodItem.formula_id}
+              WHERE fc.formula_id = ${formulaIdToUse}
             `;
             prodItem.componentes = (comps || []).map((c) => ({
               materia_prima_id: c.materia_prima_id,

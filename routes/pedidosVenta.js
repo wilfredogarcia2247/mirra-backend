@@ -104,7 +104,19 @@ router.get('/', async (req, res) => {
       // Añadir lista de componentes (nombres) por línea si la línea tiene fórmula asociada
       for (const prodItem of productosMapeados) {
         prodItem.componentes = [];
-        if (prodItem.formula_id) {
+        // Determinar formula_id a usar: preferir el guardado, si no existe intentar resolverla por nombre
+        let formulaIdToUse = prodItem.formula_id || null;
+        if (!formulaIdToUse && prodItem.producto_nombre) {
+          try {
+            const frow = await sql`
+              SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre = ${prodItem.producto_nombre} LIMIT 1
+            `;
+            if (frow && frow[0] && frow[0].id) formulaIdToUse = frow[0].id;
+          } catch (e) {
+            // ignore resolution errors
+          }
+        }
+        if (formulaIdToUse) {
           try {
             const comps = await sql`
               SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
@@ -112,7 +124,7 @@ router.get('/', async (req, res) => {
               FROM formula_componentes fc
               LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
               LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-              WHERE fc.formula_id = ${prodItem.formula_id}
+              WHERE fc.formula_id = ${formulaIdToUse}
             `;
             prodItem.componentes = (comps || []).map((c) => ({
               materia_prima_id: c.materia_prima_id,
@@ -121,7 +133,6 @@ router.get('/', async (req, res) => {
               unidad: c.unidad || null,
             }));
           } catch (e) {
-            // no bloquear la respuesta por fallo en componentes
             prodItem.componentes = [];
           }
         }
