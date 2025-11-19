@@ -10,7 +10,6 @@ function validarPedido(body) {
   for (const p of body.productos) {
     if (!p.producto_id || isNaN(Number(p.producto_id))) return 'ID de producto requerido';
     if (!p.cantidad || isNaN(Number(p.cantidad))) return 'Cantidad requerida';
-    if (p.tamano_id != null && isNaN(Number(p.tamano_id))) return 'tamano_id inválido en productos';
   }
   if (!body.estado || !['Pendiente', 'Enviado', 'Completado'].includes(body.estado))
     return 'Estado inválido';
@@ -43,31 +42,22 @@ router.get('/', async (req, res) => {
   try {
     // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
     try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN costo_unitario NUMERIC;`;
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
     } catch (e) {}
     try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN precio_venta NUMERIC;`;
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
     } catch (e) {}
     try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
-    } catch (e) {}
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_id INT;`;
-    } catch (e) {}
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_nombre TEXT;`;
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
     } catch (e) {}
     const pedidos = await sql`SELECT * FROM pedidos_venta`;
     const pedidosConDetalle = [];
     for (const p of pedidos) {
       const productos = await sql`
-         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
-           COALESCE(pv.tamano_nombre, f.nombre) AS tamano_nombre,
-           prod.nombre AS producto_nombre, prod.precio_venta, prod.costo, prod.image_url,
-           f.costo AS tamano_costo, f.precio_venta AS tamano_precio_venta
+         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
+           COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre, COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta, COALESCE(pv.costo_unitario, prod.costo) AS costo, prod.image_url
          FROM pedido_venta_productos pv
          LEFT JOIN productos prod ON prod.id = pv.producto_id
-         LEFT JOIN formulas f ON f.id = pv.tamano_id
          WHERE pv.pedido_venta_id = ${p.id}
       `;
       // Normalizar tipos y calcular subtotales
@@ -82,8 +72,6 @@ router.get('/', async (req, res) => {
           id: item.id,
           pedido_venta_id: item.pedido_venta_id,
           producto_id: item.producto_id,
-          tamano_id: item.tamano_id || null,
-          tamano_nombre: item.tamano_nombre || null,
           cantidad,
           producto_nombre: item.producto_nombre,
           precio_venta: isNaN(precio) ? null : precio,
@@ -129,35 +117,20 @@ router.post('/', async (req, res) => {
           await sql`ROLLBACK`;
           return res.status(400).json({ error: 'Cantidad inválida en productos' });
         }
-        // Obtener precio/costo/nombre al momento del pedido para snapshot (preferir tamano)
+        // Obtener snapshot de producto al momento del pedido (precio, costo, nombre)
         let precioUnitario = null;
         let costoUnitario = null;
         let nombreProducto = null;
-        if (p.tamano_id != null) {
-          // Intentar obtener snapshot desde formulas (ahora representan tamaños)
-          const tamRow =
-            await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${p.tamano_id}`;
-          if (tamRow && tamRow[0]) {
-            precioUnitario = tamRow[0].precio_venta != null ? tamRow[0].precio_venta : null;
-            costoUnitario = tamRow[0].costo != null ? tamRow[0].costo : null;
-            nombreProducto = tamRow[0].nombre != null ? tamRow[0].nombre : null;
-          }
-        }
-        if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
-          const prodRow =
-            await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
-          if (prodRow && prodRow[0]) {
-            precioUnitario = precioUnitario == null ? prodRow[0].precio_venta : precioUnitario;
-            costoUnitario = costoUnitario == null ? prodRow[0].costo : costoUnitario;
-            nombreProducto = nombreProducto == null ? prodRow[0].nombre : nombreProducto;
-          }
+        const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${p.producto_id}`;
+        if (prodRow && prodRow[0]) {
+          precioUnitario = prodRow[0].precio_venta != null ? prodRow[0].precio_venta : null;
+          costoUnitario = prodRow[0].costo != null ? prodRow[0].costo : null;
+          nombreProducto = prodRow[0].nombre != null ? prodRow[0].nombre : null;
         }
 
         await sql`
-          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, tamano_id, cantidad, costo_unitario, precio_venta, nombre_producto, tamano_nombre)
-          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.tamano_id || null}, ${
-          p.cantidad
-        }, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${p.tamano_nombre || null})
+          INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto)
+          VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})
         `;
       }
 
@@ -165,16 +138,13 @@ router.post('/', async (req, res) => {
 
       // Recuperar y devolver pedido con detalle
       const productosDetalle = await sql`
-         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.tamano_id,
-           COALESCE(pv.tamano_nombre, f.nombre) AS tamano_nombre,
+         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
            COALESCE(pv.costo_unitario, prod.costo) AS costo,
-           prod.image_url,
-           f.costo AS tamano_costo, f.precio_venta AS tamano_precio_venta
+           prod.image_url
          FROM pedido_venta_productos pv
          LEFT JOIN productos prod ON prod.id = pv.producto_id
-         LEFT JOIN formulas f ON f.id = pv.tamano_id
          WHERE pv.pedido_venta_id = ${pedido[0].id}
       `;
       let total = 0;
@@ -188,8 +158,6 @@ router.post('/', async (req, res) => {
           id: item.id,
           pedido_venta_id: item.pedido_venta_id,
           producto_id: item.producto_id,
-          tamano_id: item.tamano_id || null,
-          tamano_nombre: item.tamano_nombre || null,
           cantidad,
           producto_nombre: item.producto_nombre,
           precio_venta: isNaN(precio) ? null : precio,

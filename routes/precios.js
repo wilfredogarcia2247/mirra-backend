@@ -3,22 +3,14 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
-// GET /api/precios?producto_id=&tamano_id=
+// GET /api/precios?producto_id=
+// Nota: los parámetros relacionados con 'tamano' fueron removidos. Si se necesita precio por fórmula, consulte la tabla `formulas`.
 router.get('/', async (req, res) => {
   const { producto_id, tamano_id } = req.query;
+  if (tamano_id != null) return res.status(400).json({ error: 'Parámetro tamano_id no soportado' });
   try {
-    let q = sql`SELECT * FROM precio_productos`;
-    if (producto_id && tamano_id) {
-      q =
-        await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id} AND tamano_id = ${tamano_id}`;
-      return res.json(q);
-    }
     if (producto_id) {
-      q = await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id}`;
-      return res.json(q);
-    }
-    if (tamano_id) {
-      q = await sql`SELECT * FROM precio_productos WHERE tamano_id = ${tamano_id}`;
+      const q = await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id}`;
       return res.json(q);
     }
     const all = await sql`SELECT * FROM precio_productos`;
@@ -29,15 +21,8 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/:producto_id/:tamano_id', async (req, res) => {
-  const { producto_id, tamano_id } = req.params;
-  try {
-    const row =
-      await sql`SELECT * FROM precio_productos WHERE producto_id = ${producto_id} AND tamano_id = ${tamano_id} LIMIT 1`;
-    if (!row || row.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    res.json(row[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  // Esta ruta mantenida por compatibilidad, pero el parámetro tamano no es soportado.
+  return res.status(400).json({ error: 'Ruta de precio por tamano no soportada, use /api/precios?producto_id=' });
 });
 
 module.exports = router;

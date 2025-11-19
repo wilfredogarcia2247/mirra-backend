@@ -47,13 +47,7 @@ router.post('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
     } catch (e) {}
-    // legacy: tamano_id/tamano_nombre previously used by old tamanos table; now formulas represent sizes
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_id INT;`;
-    } catch (e) {}
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN tamano_nombre TEXT;`;
-    } catch (e) {}
+    // Note: no legacy tamano columns required here.
     const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Compatibilidad: aceptar `productos` o `lineas`
     const productos = Array.isArray(req.body.productos)
@@ -229,8 +223,8 @@ router.post('/', async (req, res) => {
             nombreProducto = nombreProducto == null ? prodRow[0].nombre : nombreProducto;
           }
         }
-        // insertar la línea incluyendo tamano_id/tamano_nombre si aplica
-        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, tamano_id, tamano_nombre) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${pf && pf.id ? pf.id : null}, ${pf && pf.nombre ? pf.nombre : null})`;
+        // insertar la línea (sin campos legacy de 'tamano')
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto})`;
       }
       await sql`COMMIT`;
 

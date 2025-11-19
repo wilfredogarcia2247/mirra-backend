@@ -125,11 +125,8 @@ async function initDB() {
       id SERIAL PRIMARY KEY,
       producto_terminado_id INT
     );`;
-    // Asegurar columnas en formulas: tamano_id (legacy, puede ser NULL), nombre (descripción del tamaño), costo y precio_venta
-    try {
-      await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS tamano_id INT`;
-    } catch (e) {}
-    // No se crea FK hacia `tamanos` en instalaciones donde la tabla fue eliminada
+    // Asegurar columnas en formulas: nombre (descripción), costo y precio_venta
+    // Nota: ya no usamos la columna legacy `tamano_id`
     try {
       await sql`ALTER TABLE formulas ADD COLUMN IF NOT EXISTS nombre VARCHAR(200);`;
     } catch (e) {}
@@ -172,22 +169,22 @@ async function initDB() {
       creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );`;
 
-    // Tabla que guarda los precios y costos calculados por producto/tamaño
+    // Tabla que guarda los precios y costos calculados por producto/formula
     await sql`CREATE TABLE IF NOT EXISTS precio_productos (
       id BIGSERIAL PRIMARY KEY,
       producto_id INTEGER NOT NULL,
-      tamano_id INTEGER NOT NULL,
+      formula_id INTEGER NOT NULL,
       sku VARCHAR(120) UNIQUE,
       costo_formula NUMERIC(14,4) DEFAULT 0,
       costo_total_fabricacion NUMERIC(14,4) DEFAULT 0,
       margen_aplicado NUMERIC(6,4) DEFAULT 1.0,
       precio_venta_base NUMERIC(14,4) DEFAULT 0,
-      factor_tamano NUMERIC(6,4) DEFAULT 1.0,
+      factor_formula NUMERIC(6,4) DEFAULT 1.0,
       precio_venta_final NUMERIC(14,4) DEFAULT 0,
       actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );`;
     try {
-      await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_precio_prod_tamano ON precio_productos (producto_id, tamano_id);`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_precio_prod_formula ON precio_productos (producto_id, formula_id);`;
     } catch (e) {}
     // Tabla para tasas de cambio
     await sql`CREATE TABLE IF NOT EXISTS tasas_cambio (

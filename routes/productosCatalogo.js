@@ -88,22 +88,21 @@ router.get('/', async (req, res) => {
       ) inv_tot ON inv_tot.producto_id = p.id
       WHERE p.id = ANY(${prodIds})
     `;
-    // Obtener fórmulas (ahora sirven como definición de tamaño) para los productos listados
+    // Obtener fórmulas (presentaciones) para los productos listados
     const productIds = (rows || []).map((r) => r.id);
     let formulasRows = [];
     if (productIds.length > 0) {
       formulasRows = await sql`
-        SELECT id, producto_terminado_id AS producto_id, nombre AS tamano_descripcion, costo, precio_venta
+        SELECT id, producto_terminado_id AS producto_id, nombre AS formula_nombre, costo, precio_venta
         FROM formulas WHERE producto_terminado_id = ANY(${productIds}) ORDER BY producto_terminado_id, nombre
       `;
     }
-
-    // Agrupar 'tamaños' por producto usando las fórmulas
-    const tamanosPorProducto = {};
+    // Agrupar 'formulas' (presentaciones) por producto usando las filas de `formulas`
+    const formulasPorProducto = {};
     (formulasRows || []).forEach((f) => {
       const entry = {
-        id: f.id, // id de la fórmula
-        nombre: f.tamano_descripcion || null,
+        id: f.id,
+        nombre: f.formula_nombre || null,
         cantidad: null,
         unidad: null,
         costo: f.costo != null ? Number(f.costo) : null,
@@ -112,8 +111,8 @@ router.get('/', async (req, res) => {
         precio_calculado: null,
         costo_pedido: f.costo != null ? Number(f.costo) : null,
       };
-      if (!tamanosPorProducto[f.producto_id]) tamanosPorProducto[f.producto_id] = [];
-      tamanosPorProducto[f.producto_id].push(entry);
+      if (!formulasPorProducto[f.producto_id]) formulasPorProducto[f.producto_id] = [];
+      formulasPorProducto[f.producto_id].push(entry);
     });
 
     const enriched = (rows || []).map((p) => {
@@ -148,15 +147,15 @@ router.get('/', async (req, res) => {
         unidad: p.unidad,
         stock: Number(p.stock),
         precio_venta: p.precio_venta,
-        tamanos: tamanosPorProducto[p.id] || [],
+        formulas: formulasPorProducto[p.id] || [],
         image_url: p.image_url,
         categoria,
         marca,
         inventario,
       };
     })
-      // Filtrar solo productos que tengan al menos una fórmula (presentación/tamaño)
-      .filter((prod) => Array.isArray(prod.tamanos) && prod.tamanos.length > 0);
+      // Filtrar solo productos que tengan al menos una fórmula (presentación)
+      .filter((prod) => Array.isArray(prod.formulas) && prod.formulas.length > 0);
 
     res.json(enriched);
   } catch (err) {
