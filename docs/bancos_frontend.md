@@ -5,16 +5,19 @@ Este documento describe los endpoints CRUD para `bancos` que el frontend puede c
 Base: /api/bancos
 
 Autenticación
+
 - Todas las rutas están protegidas por middleware de autenticación (JWT). El frontend debe enviar header:
   Authorization: Bearer <token>
 
 Esquema banco
+
 - id: integer
 - nombre: string
 
 Endpoints
 
-1) Listar bancos
+1. Listar bancos
+
 - Método: GET
 - Ruta: /api/bancos
 - Headers: Authorization
@@ -22,12 +25,14 @@ Endpoints
   [ { "id": 1, "nombre": "Banco Uno" }, ... ]
 
 Ejemplo fetch:
+
 ```js
 const res = await fetch('/api/bancos', { headers: { Authorization: `Bearer ${token}` } });
 const bancos = await res.json();
 ```
 
-2) Crear banco
+2. Crear banco
+
 - Método: POST
 - Ruta: /api/bancos
 - Headers: Authorization, Content-Type: application/json
@@ -35,21 +40,24 @@ const bancos = await res.json();
 - Respuesta (201): objeto banco creado
 
 Ejemplo fetch:
+
 ```js
 const res = await fetch('/api/bancos', {
   method: 'POST',
   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ nombre: 'Banco Nuevo' })
+  body: JSON.stringify({ nombre: 'Banco Nuevo' }),
 });
 const banco = await res.json();
 ```
 
 Validaciones y errores:
+
 - 400: nombre requerido o invalid
 - 401: no autorizado
 - 500: error servidor
 
-3) Obtener banco por id
+3. Obtener banco por id
+
 - Método: GET
 - Ruta: /api/bancos/:id
 - Headers: Authorization
@@ -57,13 +65,17 @@ Validaciones y errores:
 - 404 si no existe
 
 Ejemplo fetch:
+
 ```js
 const res = await fetch(`/api/bancos/${id}`, { headers: { Authorization: `Bearer ${token}` } });
-if (res.status === 404) { /* manejar no encontrado */ }
+if (res.status === 404) {
+  /* manejar no encontrado */
+}
 const banco = await res.json();
 ```
 
-4) Actualizar banco
+4. Actualizar banco
+
 - Método: PUT
 - Ruta: /api/bancos/:id
 - Headers: Authorization, Content-Type: application/json
@@ -71,16 +83,17 @@ const banco = await res.json();
 - Respuesta (200): objeto banco actualizado
 
 Ejemplo fetch:
+
 ```js
 const res = await fetch(`/api/bancos/${id}`, {
   method: 'PUT',
   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ nombre: 'Banco Modificado' })
+  body: JSON.stringify({ nombre: 'Banco Modificado' }),
 });
 const updated = await res.json();
 ```
 
-- 5) Eliminar banco
+- 5. Eliminar banco
 - Método: DELETE
 - Ruta: /api/bancos/:id
 - Headers: Authorization
@@ -90,18 +103,26 @@ const updated = await res.json();
 Nota: en algunas instalaciones la tabla `cliente_bancos` fue eliminada; en ese caso el backend no realizará la comprobación y permitirá la eliminación si no hay referencias en otras tablas.
 
 Ejemplo fetch:
+
 ```js
-const res = await fetch(`/api/bancos/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+const res = await fetch(`/api/bancos/${id}`, {
+  method: 'DELETE',
+  headers: { Authorization: `Bearer ${token}` },
+});
 const body = await res.json();
-if (!res.ok) { console.error(body); }
+if (!res.ok) {
+  console.error(body);
+}
 ```
 
 Buenas prácticas para el frontend
+
 - Validar formulario antes de enviar (nombre no vacío).
 - Manejar códigos 400/401/404 para dar feedback claro al usuario.
 - Cuando se elimina un banco, refrescar la lista de bancos. Si su instalación mantiene la tabla `cliente_bancos`, refrescar también esa lista.
 
 Notas de implementación
+
 - El backend valida `nombre` como string no vacío.
 - En instalaciones con la tabla `cliente_bancos`, el backend puede impedir eliminar bancos que tengan entradas en `cliente_bancos`. En instalaciones donde esa tabla fue eliminada, esa comprobación no existe.
 
@@ -125,22 +146,22 @@ Ejemplo: Banco de Venezuela (semilla)
 POST /api/bancos (body)
 
 {
-  "nombre": "Banco de Venezuela",
-  "formas_pago": [
-    { "forma_pago_id": 2, "detalles": { "numero_cuenta": "00012345678", "documento": "V-12345678" } },
-    { "forma_pago_id": 4, "detalles": { "numero_telefono": "04241234567", "documento": "V-12345678", "operador": "MOV" } }
-  ]
+"nombre": "Banco de Venezuela",
+"formas_pago": [
+{ "forma_pago_id": 2, "detalles": { "numero_cuenta": "00012345678", "documento": "V-12345678" } },
+{ "forma_pago_id": 4, "detalles": { "numero_telefono": "04241234567", "documento": "V-12345678", "operador": "MOV" } }
+]
 }
 
 GET /api/bancos/:id (respuesta esperada)
 
 {
-  "id": 10,
-  "nombre": "Banco de Venezuela",
-  "formas_pago": [
-    { "id": 2, "nombre": "Transferencia", "detalles": { "numero_cuenta": "00012345678", "documento": "V-12345678" } },
-    { "id": 4, "nombre": "Pago Movil", "detalles": { "numero_telefono": "04241234567", "documento": "V-12345678", "operador": "MOV" } }
-  ]
+"id": 10,
+"nombre": "Banco de Venezuela",
+"formas_pago": [
+{ "id": 2, "nombre": "Transferencia", "detalles": { "numero_cuenta": "00012345678", "documento": "V-12345678" } },
+{ "id": 4, "nombre": "Pago Movil", "detalles": { "numero_telefono": "04241234567", "documento": "V-12345678", "operador": "MOV" } }
+]
 }
 
 Fecha: 11-11-2025

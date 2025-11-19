@@ -1,9 +1,11 @@
 # Aromas - Sistema de Gestión de Perfumería
 
 ## Descripción
+
 Aromas es un sistema de gestión para empresas de perfumería, desarrollado en Node.js con Express y NeonDB. Permite administrar productos, almacenes, fórmulas, inventario, pedidos, bancos, pagos y usuarios con roles. Incluye autenticación JWT, documentación Swagger y pruebas automáticas.
 
 ## Características
+
 - API RESTful modular
 - Autenticación JWT y roles (admin, empleado)
 - Base de datos NeonDB (PostgreSQL serverless)
@@ -12,6 +14,7 @@ Aromas es un sistema de gestión para empresas de perfumería, desarrollado en N
 - Scripts de inicialización y semillas
 
 ## Estructura del Proyecto
+
 ```
 Aromas/
 ├── src/
@@ -28,6 +31,7 @@ Aromas/
 ```
 
 ## Instalación
+
 1. Clona el repositorio:
    ```bash
    git clone https://github.com/leonardou92/aromas.git
@@ -52,27 +56,30 @@ Aromas/
    ```
 
 ## Uso de la API
+
 - Accede a la documentación interactiva en [http://localhost:3000/api-docs](http://localhost:3000/api-docs)
 - Endpoints principales:
   - Autenticación: `POST /api/auth/login`, `POST /api/auth/register`
   - Productos: `GET/POST /api/productos`
-   - Catálogo público de productos: `GET /api/productos/catalogo` (no requiere token)
+  - Catálogo público de productos: `GET /api/productos/catalogo` (no requiere token)
   - Almacenes: `GET /api/almacenes`
   - Fórmulas: `GET /api/formulas`
   - Inventario: `GET /api/inventario`
-   - Pedidos: `GET /api/pedidos-venta`
+  - Pedidos: `GET /api/pedidos-venta`
   - Bancos: `GET /api/bancos`
   - Formas de pago: `GET /api/formas-pago`
-   - Nota: los endpoints `contactos`, `cliente_bancos`, `proveedores`, `pedidos-compra` y la tabla `tamanos` fueron eliminados en esta versión.
-   - Las presentaciones/tamaños ahora se modelan como filas en `formulas`; usa `GET /api/formulas` y `POST /api/formulas`.
+  - Nota: los endpoints `contactos`, `cliente_bancos`, `proveedores`, `pedidos-compra` y la tabla `tamanos` fueron eliminados en esta versión.
+  - Las presentaciones/tamaños ahora se modelan como filas en `formulas`; usa `GET /api/formulas` y `POST /api/formulas`.
   - Pagos: `GET /api/pagos`
 
 ## Autenticación y Roles
+
 - Registra un usuario con `POST /api/auth/register` (campos: nombre, email, password, rol)
 - Inicia sesión con `POST /api/auth/login` (campos: email, password)
 - Usa el token JWT en el header `Authorization: Bearer <token>` para acceder a los endpoints protegidos
 
 ## Pruebas
+
 - Ejecuta las pruebas unitarias:
   ```bash
   npm test
@@ -80,6 +87,7 @@ Aromas/
 - Las pruebas validan todos los endpoints protegidos por JWT
 
 ## Tecnologías
+
 - Node.js
 - Express
 - NeonDB (@neondatabase/serverless)
@@ -90,14 +98,17 @@ Aromas/
 - Supertest
 
 ## Contribución
+
 1. Haz un fork del repositorio
 2. Crea una rama (`git checkout -b feature/nueva-funcionalidad`)
 3. Realiza tus cambios y haz commit
 4. Envía un pull request
 
 ## Autor
+
 - Leonardo Urdaneta
 - [leonardou92@gmail.com](mailto:leonardou92@gmail.com)
 
 ## Licencia
+
 MIT
