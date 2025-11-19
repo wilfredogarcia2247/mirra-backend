@@ -70,10 +70,6 @@
       "get": { "summary": "Listar formas de pago", "responses": { "200": { "description": "Lista de formas de pago" } } },
       "post": { "summary": "Crear forma de pago", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FormaPago" } } } }, "responses": { "201": { "description": "Forma de pago creada" } } }
     },
-    "/cliente-bancos": {
-      "get": { "summary": "Listar bancos de clientes", "responses": { "200": { "description": "Lista de bancos de clientes" } } },
-      "post": { "summary": "Asociar banco a cliente", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ClienteBanco" } } } }, "responses": { "201": { "description": "Banco asociado" } } }
-    },
     "/pagos": {
       "get": { "summary": "Listar pagos", "responses": { "200": { "description": "Lista de pagos" } } },
       "post": { "summary": "Registrar pago", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pago" } } } }, "responses": { "201": { "description": "Pago registrado" } } }
@@ -129,14 +125,6 @@
         "type": "object",
         "properties": {
           "nombre": { "type": "string" }
-        }
-      },
-      "ClienteBanco": {
-        "type": "object",
-        "properties": {
-          "cliente_id": { "type": "integer" },
-          "banco_id": { "type": "integer" },
-          "cuenta_bancaria": { "type": "string" }
         }
       },
       "Pago": {
