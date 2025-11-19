@@ -60,14 +60,12 @@ router.post('/', async (req, res) => {
     try {
       await sql`ALTER TABLE formulas ADD COLUMN precio_venta NUMERIC;`;
     } catch (e) {}
-    const { producto_terminado_id, componentes, nombre, tamano_id } = req.body;
+    const { producto_terminado_id, componentes, nombre } = req.body;
     const { costo, precio_venta } = req.body;
-    // Verificar que el tamaño existe y pertenece al producto terminado
-    // tamano_id legacy: aceptamos valor si se provee, pero la tabla `tamanos` puede no existir.
-    let tam = tamano_id ? tamano_id : null;
+    // `tamano_id` es legacy y ya no se utiliza: las presentaciones se modelan como filas en `formulas`.
     const formula = await sql`
-      INSERT INTO formulas (producto_terminado_id, nombre, tamano_id, costo, precio_venta)
-      VALUES (${producto_terminado_id}, ${nombre}, ${tam}, ${costo}, ${precio_venta}) RETURNING *
+      INSERT INTO formulas (producto_terminado_id, nombre, costo, precio_venta)
+      VALUES (${producto_terminado_id}, ${nombre}, ${costo}, ${precio_venta}) RETURNING *
     `;
     for (const c of componentes) {
       await sql`
@@ -95,11 +93,8 @@ router.put('/:id', async (req, res) => {
     try {
       await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`;
     } catch (e) {}
-    const { producto_terminado_id, componentes, nombre, tamano_id } = req.body;
+    const { producto_terminado_id, componentes, nombre } = req.body;
     const { costo, precio_venta } = req.body;
-    // Verificar que el tamaño existe y pertenece al producto terminado
-    // tamano_id legacy: aceptamos valor si se provee, pero la tabla `tamanos` puede no existir.
-    let tam = tamano_id ? tamano_id : null;
     await sql`BEGIN`;
     // Verificar que la fórmula exista
     const f = await sql`SELECT * FROM formulas WHERE id = ${formulaId} FOR NO KEY UPDATE`;
@@ -108,7 +103,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Fórmula no encontrada' });
     }
     // Actualizar producto_terminado_id
-    await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, tamano_id = ${tam}, costo = ${costo}, precio_venta = ${precio_venta} WHERE id = ${formulaId}`;
+    await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, costo = ${costo}, precio_venta = ${precio_venta} WHERE id = ${formulaId}`;
     // Reemplazar componentes: eliminar existentes e insertar nuevos
     await sql`DELETE FROM formula_componentes WHERE formula_id = ${formulaId}`;
     for (const c of componentes) {
