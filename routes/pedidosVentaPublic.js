@@ -147,9 +147,33 @@ router.post('/', async (req, res) => {
           costo: costo,
           image_url: item.image_url,
           produccion_creada: !!item.produccion_creada,
+          componentes: [],
           subtotal,
         };
       });
+      // Añadir nombres de componentes si la línea tiene formula_id guardada
+      for (const prodItem of productosMapeados) {
+        if (prodItem.formula_id) {
+          try {
+            const comps = await sql`
+              SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                     COALESCE(mp.nombre, ing.nombre) AS nombre
+              FROM formula_componentes fc
+              LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+              LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+              WHERE fc.formula_id = ${prodItem.formula_id}
+            `;
+            prodItem.componentes = (comps || []).map((c) => ({
+              materia_prima_id: c.materia_prima_id,
+              nombre: c.nombre || null,
+              cantidad: c.cantidad != null ? Number(c.cantidad) : null,
+              unidad: c.unidad || null,
+            }));
+          } catch (e) {
+            prodItem.componentes = [];
+          }
+        }
+      }
       const pedidoObj = {
         ...pedido[0],
         productos: productosMapeados,

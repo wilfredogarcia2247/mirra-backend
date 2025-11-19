@@ -100,6 +100,32 @@ router.get('/', async (req, res) => {
           subtotal,
         };
       });
+
+      // Añadir lista de componentes (nombres) por línea si la línea tiene fórmula asociada
+      for (const prodItem of productosMapeados) {
+        prodItem.componentes = [];
+        if (prodItem.formula_id) {
+          try {
+            const comps = await sql`
+              SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                     COALESCE(mp.nombre, ing.nombre) AS nombre
+              FROM formula_componentes fc
+              LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+              LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+              WHERE fc.formula_id = ${prodItem.formula_id}
+            `;
+            prodItem.componentes = (comps || []).map((c) => ({
+              materia_prima_id: c.materia_prima_id,
+              nombre: c.nombre || null,
+              cantidad: c.cantidad != null ? Number(c.cantidad) : null,
+              unidad: c.unidad || null,
+            }));
+          } catch (e) {
+            // no bloquear la respuesta por fallo en componentes
+            prodItem.componentes = [];
+          }
+        }
+      }
       pedidosConDetalle.push({
         ...p,
         productos: productosMapeados,
@@ -280,6 +306,30 @@ router.get('/:id', async (req, res) => {
         subtotal,
       };
     });
+    // Añadir componentes por línea en detalle de pedido (GET /:id)
+    for (const prodItem of productosMapeados) {
+      prodItem.componentes = [];
+      if (prodItem.formula_id) {
+        try {
+          const comps = await sql`
+            SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                   COALESCE(mp.nombre, ing.nombre) AS nombre
+            FROM formula_componentes fc
+            LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+            LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+            WHERE fc.formula_id = ${prodItem.formula_id}
+          `;
+          prodItem.componentes = (comps || []).map((c) => ({
+            materia_prima_id: c.materia_prima_id,
+            nombre: c.nombre || null,
+            cantidad: c.cantidad != null ? Number(c.cantidad) : null,
+            unidad: c.unidad || null,
+          }));
+        } catch (e) {
+          prodItem.componentes = [];
+        }
+      }
+    }
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
     res.json(pedidoObj);
   } catch (err) {
@@ -319,6 +369,23 @@ async function completarPedidoTransaccional(pedidoId) {
       const e = new Error('Cantidad inválida en líneas del pedido');
       e.code = 'INVALID_QTY';
       throw e;
+    }
+    // Verificar que exista producción completada suficiente para este producto
+    try {
+      const prodRes = await sql`
+        SELECT COALESCE(SUM(cantidad),0) AS produced FROM ordenes_produccion
+        WHERE producto_terminado_id = ${linea.producto_id} AND estado = 'Completada'
+      `;
+      const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
+      if (produced < qtyNeeded) {
+        await sql`ROLLBACK`;
+        const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
+        e.code = 'NOT_PRODUCED';
+        throw e;
+      }
+    } catch (errCheck) {
+      if (errCheck && errCheck.code === 'NOT_PRODUCED') throw errCheck;
+      // Si falla la comprobación por cualquier motivo, continuar con el flujo de inventario
     }
     const invs = await sql`
       SELECT i.* FROM inventario i
@@ -468,6 +535,7 @@ router.post('/:id/completar', async (req, res) => {
     const result = await completarPedidoTransaccional(pedidoId, pago);
     return res.json(result);
   } catch (err) {
+    if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
     if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED')
@@ -713,6 +781,7 @@ router.put('/:id/status', async (req, res) => {
         if (err.code === 'ALREADY_COMPLETED') return res.status(400).json({ error: err.message });
         if (err.code === 'INSUFFICIENT_RESERVED')
           return res.status(400).json({ error: err.message });
+        if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
         if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
         console.error(err);
         return res.status(500).json({ error: 'Error completando pedido' });
