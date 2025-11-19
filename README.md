@@ -1,7 +1,7 @@
 # Aromas - Sistema de Gestión de Perfumería
 
 ## Descripción
-Aromas es un sistema de gestión para empresas de perfumería, desarrollado en Node.js con Express y NeonDB. Permite administrar productos, almacenes, fórmulas, inventario, pedidos, contactos, bancos, pagos y usuarios con roles. Incluye autenticación JWT, documentación Swagger y pruebas automáticas.
+Aromas es un sistema de gestión para empresas de perfumería, desarrollado en Node.js con Express y NeonDB. Permite administrar productos, almacenes, fórmulas, inventario, pedidos, bancos, pagos y usuarios con roles. Incluye autenticación JWT, documentación Swagger y pruebas automáticas.
 
 ## Características
 - API RESTful modular
@@ -63,8 +63,8 @@ Aromas/
    - Pedidos: `GET /api/pedidos-venta`
   - Bancos: `GET /api/bancos`
   - Formas de pago: `GET /api/formas-pago`
-   - (Contactos removed)
-   - (Cliente-bancos removed)
+   - Nota: los endpoints `contactos`, `cliente_bancos`, `proveedores`, `pedidos-compra` y la tabla `tamanos` fueron eliminados en esta versión.
+   - Las presentaciones/tamaños ahora se modelan como filas en `formulas`; usa `GET /api/formulas` y `POST /api/formulas`.
   - Pagos: `GET /api/pagos`
 
 ## Autenticación y Roles

@@ -80,12 +80,14 @@ const res = await fetch(`/api/bancos/${id}`, {
 const updated = await res.json();
 ```
 
-5) Eliminar banco
+- 5) Eliminar banco
 - Método: DELETE
 - Ruta: /api/bancos/:id
 - Headers: Authorization
 - Comportamiento: Si el banco está asociado a `cliente_bancos`, la API devuelve 400 y no permite borrarlo. Esto evita eliminar bancos en uso.
 - Respuesta (200): { success: true, banco: { ... } }
+
+Nota: en algunas instalaciones la tabla `cliente_bancos` fue eliminada; en ese caso el backend no realizará la comprobación y permitirá la eliminación si no hay referencias en otras tablas.
 
 Ejemplo fetch:
 ```js
@@ -97,11 +99,11 @@ if (!res.ok) { console.error(body); }
 Buenas prácticas para el frontend
 - Validar formulario antes de enviar (nombre no vacío).
 - Manejar códigos 400/401/404 para dar feedback claro al usuario.
-- Cuando se elimina un banco, refrescar la lista de bancos y también la lista de `cliente_bancos` si corresponde.
+- Cuando se elimina un banco, refrescar la lista de bancos. Si su instalación mantiene la tabla `cliente_bancos`, refrescar también esa lista.
 
 Notas de implementación
 - El backend valida `nombre` como string no vacío.
-- El backend impide eliminar bancos que tengan entradas en `cliente_bancos`.
+- En instalaciones con la tabla `cliente_bancos`, el backend puede impedir eliminar bancos que tengan entradas en `cliente_bancos`. En instalaciones donde esa tabla fue eliminada, esa comprobación no existe.
 
 Formas de pago y campo `detalles`
 
