@@ -39,6 +39,89 @@ function validarPagoObj(pago) {
   return null;
 }
 
+// Helper: resolver componentes para una línea de pedido
+async function getComponentesForLine(productoId, formulaId, formulaNombre, productoNombre) {
+  try {
+    const tryQuery = async (fid) => {
+      return await sql`
+        SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+               COALESCE(mp.nombre, ing.nombre) AS nombre
+        FROM formula_componentes fc
+        LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        WHERE fc.formula_id = ${fid}
+      `;
+    };
+
+    let useFormulaId = formulaId || null;
+
+    // Intentos de resolución: 1) si ya viene formulaId usarla, 2) coincidir por formulaNombre exacto,
+    // 3) coincidir por productoNombre exacto, 4) búsqueda difusa ILIKE por formulaNombre/productoNombre
+    if (!useFormulaId) {
+      if (formulaNombre) {
+        const frow = await sql`
+          SELECT id FROM formulas WHERE producto_terminado_id = ${productoId} AND nombre = ${formulaNombre} LIMIT 1
+        `;
+        if (frow && frow[0] && frow[0].id) useFormulaId = frow[0].id;
+      }
+      if (!useFormulaId && productoNombre) {
+        const frow2 = await sql`
+          SELECT id FROM formulas WHERE producto_terminado_id = ${productoId} AND nombre = ${productoNombre} LIMIT 1
+        `;
+        if (frow2 && frow2[0] && frow2[0].id) useFormulaId = frow2[0].id;
+      }
+    }
+
+    if (useFormulaId) {
+      let comps = await tryQuery(useFormulaId);
+      if ((!comps || comps.length === 0) && formulaNombre) {
+        const likePattern = '%' + formulaNombre + '%';
+        const frow = await sql`
+          SELECT id FROM formulas WHERE producto_terminado_id = ${productoId} AND nombre ILIKE ${likePattern} LIMIT 1
+        `;
+        if (frow && frow[0] && frow[0].id) comps = await tryQuery(frow[0].id);
+      }
+      if ((!comps || comps.length === 0) && productoNombre) {
+        const likePattern2 = '%' + productoNombre + '%';
+        const frow2 = await sql`
+          SELECT id FROM formulas WHERE producto_terminado_id = ${productoId} AND nombre ILIKE ${likePattern2} LIMIT 1
+        `;
+        if (frow2 && frow2[0] && frow2[0].id) comps = await tryQuery(frow2[0].id);
+      }
+      if (comps && comps.length > 0) {
+        return comps.map((c) => ({
+          materia_prima_id: c.materia_prima_id,
+          nombre: c.nombre || null,
+          cantidad: c.cantidad != null ? Number(c.cantidad) : null,
+          unidad: c.unidad || null,
+        }));
+      }
+    } else {
+      // intentar búsqueda difusa por productoNombre si no hay formulaId
+      if (productoNombre) {
+        const like = '%' + productoNombre + '%';
+        const frow = await sql`
+          SELECT id FROM formulas WHERE producto_terminado_id = ${productoId} AND nombre ILIKE ${like} LIMIT 1
+        `;
+        if (frow && frow[0] && frow[0].id) {
+          const comps = await tryQuery(frow[0].id);
+          if (comps && comps.length > 0) {
+            return comps.map((c) => ({
+              materia_prima_id: c.materia_prima_id,
+              nombre: c.nombre || null,
+              cantidad: c.cantidad != null ? Number(c.cantidad) : null,
+              unidad: c.unidad || null,
+            }));
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // ignore y devolver array vacío
+  }
+  return [];
+}
+
 router.get('/', async (req, res) => {
   try {
     // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó en este entorno
@@ -103,60 +186,12 @@ router.get('/', async (req, res) => {
 
       // Añadir lista de componentes (nombres) por línea si la línea tiene fórmula asociada
       for (const prodItem of productosMapeados) {
-        prodItem.componentes = [];
-        // Determinar formula_id a usar: preferir el guardado, si no existe intentar resolverla por nombre
-        let formulaIdToUse = prodItem.formula_id || null;
-        if (!formulaIdToUse && prodItem.producto_nombre) {
-          try {
-            const frow = await sql`
-              SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre = ${prodItem.producto_nombre} LIMIT 1
-            `;
-            if (frow && frow[0] && frow[0].id) formulaIdToUse = frow[0].id;
-          } catch (e) {
-            // ignore resolution errors
-          }
-        }
-        if (formulaIdToUse) {
-          try {
-            let comps = await sql`
-              SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                     COALESCE(mp.nombre, ing.nombre) AS nombre
-              FROM formula_componentes fc
-              LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
-              LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-              WHERE fc.formula_id = ${formulaIdToUse}
-            `;
-            // Si no hay componentes para la fórmula exacta, intentar búsqueda difusa por nombre de fórmula
-            if ((!comps || comps.length === 0) && prodItem.producto_nombre) {
-              try {
-                const likePattern = '%' + prodItem.producto_nombre + '%';
-                const frow = await sql`
-                  SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre ILIKE ${likePattern} LIMIT 1
-                `;
-                if (frow && frow[0] && frow[0].id) {
-                  comps = await sql`
-                    SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                           COALESCE(mp.nombre, ing.nombre) AS nombre
-                    FROM formula_componentes fc
-                    LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
-                    LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-                    WHERE fc.formula_id = ${frow[0].id}
-                  `;
-                }
-              } catch (e) {
-                // ignore fuzzy lookup errors
-              }
-            }
-            prodItem.componentes = (comps || []).map((c) => ({
-              materia_prima_id: c.materia_prima_id,
-              nombre: c.nombre || null,
-              cantidad: c.cantidad != null ? Number(c.cantidad) : null,
-              unidad: c.unidad || null,
-            }));
-          } catch (e) {
-            prodItem.componentes = [];
-          }
-        }
+        prodItem.componentes = await getComponentesForLine(
+          prodItem.producto_id,
+          prodItem.formula_id,
+          prodItem.formula_nombre,
+          prodItem.producto_nombre
+        );
       }
       pedidosConDetalle.push({
         ...p,
@@ -340,27 +375,12 @@ router.get('/:id', async (req, res) => {
     });
     // Añadir componentes por línea en detalle de pedido (GET /:id)
     for (const prodItem of productosMapeados) {
-      prodItem.componentes = [];
-      if (prodItem.formula_id) {
-        try {
-          const comps = await sql`
-            SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                   COALESCE(mp.nombre, ing.nombre) AS nombre
-            FROM formula_componentes fc
-            LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
-            LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-            WHERE fc.formula_id = ${prodItem.formula_id}
-          `;
-          prodItem.componentes = (comps || []).map((c) => ({
-            materia_prima_id: c.materia_prima_id,
-            nombre: c.nombre || null,
-            cantidad: c.cantidad != null ? Number(c.cantidad) : null,
-            unidad: c.unidad || null,
-          }));
-        } catch (e) {
-          prodItem.componentes = [];
-        }
-      }
+      prodItem.componentes = await getComponentesForLine(
+        prodItem.producto_id,
+        prodItem.formula_id,
+        prodItem.formula_nombre,
+        prodItem.producto_nombre
+      );
     }
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
     res.json(pedidoObj);
