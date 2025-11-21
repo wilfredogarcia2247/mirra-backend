@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 
+// Cargar .env (para usar el mismo JWT_SECRET que el servidor)
+require('dotenv').config();
 // Leer .env manualmente para evitar logs de wrappers de dotenv
 function readEnvVar(key) {
 	try {
@@ -27,7 +29,7 @@ function readEnvVar(key) {
 	return null;
 }
 
-const secret = readEnvVar('JWT_SECRET') || process.env.JWT_SECRET || 'test_secret';
+const secret = process.env.JWT_SECRET || readEnvVar('JWT_SECRET') || 'test_secret';
 const token = jwt.sign({ sub: 1, email: 'dev@example.com' }, secret, { expiresIn: '1h' });
 // imprimir únicamente el token en stdout para facilitar captura automática
 process.stdout.write(token + '\n');

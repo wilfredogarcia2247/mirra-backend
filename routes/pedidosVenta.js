@@ -1284,4 +1284,82 @@ router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) =>
   }
 });
 
+// DELETE /api/pedidos-venta/:pedidoId/lineas/:lineaId -> eliminar línea si no tiene orden de producción
+router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
+  const pedidoId = Number(req.params.pedidoId);
+  const lineaId = Number(req.params.lineaId);
+  if (isNaN(pedidoId) || isNaN(lineaId)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    await sql`BEGIN`;
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const pedido = pedidoRows[0];
+    if (pedido.estado === 'Completado' || pedido.estado === 'Cancelado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: `No se pueden eliminar líneas de un pedido con estado ${pedido.estado}` });
+    }
+
+    const lineaRows = await sql`SELECT * FROM pedido_venta_productos WHERE id = ${lineaId} AND pedido_venta_id = ${pedidoId} FOR UPDATE`;
+    if (!lineaRows || lineaRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Línea no encontrada' });
+    }
+    const linea = lineaRows[0];
+
+    // No permitir eliminación si ya se creó una orden de producción para la línea
+    if (linea.orden_produccion_id != null || linea.produccion_creada) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'No se puede eliminar la línea: ya existe una orden de producción asociada' });
+    }
+
+    // Eliminar la línea
+    await sql`DELETE FROM pedido_venta_productos WHERE id = ${lineaId}`;
+    await sql`COMMIT`;
+
+    // Devolver pedido actualizado (reusar consulta de detalle)
+    const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
+    const productosDetalle = await sql`
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+             COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+             COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+             COALESCE(pv.costo_unitario, prod.costo) AS costo, pv.orden_produccion_id, COALESCE(pv.produccion_creada, FALSE) AS produccion_creada, prod.image_url
+      FROM pedido_venta_productos pv
+      LEFT JOIN productos prod ON prod.id = pv.producto_id
+      WHERE pv.pedido_venta_id = ${pedidoId}
+    `;
+    let total = 0;
+    const productosMapeados = (productosDetalle || []).map((item) => {
+      const cantidad = Number(item.cantidad);
+      const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+      const costo = item.costo != null ? parseFloat(item.costo) : null;
+      const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+      total += subtotal;
+      return {
+        id: item.id,
+        pedido_venta_id: item.pedido_venta_id,
+        producto_id: item.producto_id,
+        formula_id: item.formula_id || null,
+        formula_nombre: item.formula_nombre || null,
+        orden_produccion_id: item.orden_produccion_id || null,
+        produccion_creada: !!item.produccion_creada,
+        cantidad,
+        producto_nombre: item.producto_nombre,
+        precio_venta: isNaN(precio) ? null : precio,
+        costo: costo,
+        image_url: item.image_url,
+        subtotal,
+      };
+    });
+    const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
+    return res.json(pedidoObj);
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) {}
+    console.error('Error eliminando línea del pedido:', err);
+    return res.status(500).json({ error: 'Error eliminando línea' });
+  }
+});
+
 module.exports = router;
