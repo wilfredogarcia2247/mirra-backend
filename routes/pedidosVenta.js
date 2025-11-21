@@ -1169,6 +1169,74 @@ router.post('/:id/cancelar', async (req, res) => {
     }
 
     // Finalmente marcar pedido como Cancelado
+    // Antes de marcar como Cancelado, verificar si hay órdenes de producción asociadas
+    // y devolver inventario por las órdenes completadas (producto terminado + componentes)
+    const ordenIdsRows = await sql`
+      SELECT DISTINCT pv.orden_produccion_id AS orden_id
+      FROM pedido_venta_productos pv
+      WHERE pv.pedido_venta_id = ${pedidoId} AND pv.orden_produccion_id IS NOT NULL
+    `;
+    const produccionRevertida = [];
+    for (const or of ordenIdsRows) {
+      const oid = or.orden_id;
+      if (!oid) continue;
+      // Bloquear la orden para consistencia
+      const ordenRows = await sql`SELECT * FROM ordenes_produccion WHERE id = ${oid} FOR UPDATE`;
+      if (!ordenRows || ordenRows.length === 0) continue;
+      const orden = ordenRows[0];
+      // Solo revertir si la orden está completada (se produjo el material)
+      if (orden.estado !== 'Completada') continue;
+      const producedQty = Number(orden.cantidad) || 0;
+      if (producedQty <= 0) continue;
+
+      // Determinar almacén destino para devolver (preferir tipo 'interno', si no usar primer almacén)
+      let almacenRow = await sql`SELECT id FROM almacenes WHERE tipo = 'interno' LIMIT 1`;
+      let almacenId = almacenRow && almacenRow[0] ? almacenRow[0].id : null;
+      if (!almacenId) {
+        const anyA = await sql`SELECT id FROM almacenes LIMIT 1`;
+        almacenId = anyA && anyA[0] ? anyA[0].id : null;
+      }
+
+      // Devolver producto terminado al inventario
+      if (orden.producto_terminado_id && almacenId) {
+        const invRows = await sql`SELECT * FROM inventario WHERE producto_id = ${orden.producto_terminado_id} AND almacen_id = ${almacenId} FOR UPDATE`;
+        if (invRows && invRows.length > 0) {
+          await sql`UPDATE inventario SET stock_fisico = stock_fisico + ${producedQty} WHERE id = ${invRows[0].id}`;
+        } else {
+          try {
+            await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${orden.producto_terminado_id}, ${almacenId}, ${producedQty}, 0)`;
+          } catch (e) {}
+        }
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${orden.producto_terminado_id}, ${almacenId}, 'entrada', ${producedQty}, ${'Cancelación pedido ' + pedidoId + ' - devolución producción orden ' + oid})`;
+      }
+
+      // Devolver componentes usados según la fórmula asociada
+      if (orden.formula_id) {
+        const comps = await sql`SELECT materia_prima_id, cantidad FROM formula_componentes WHERE formula_id = ${orden.formula_id}`;
+        for (const c of comps) {
+          const compId = c.materia_prima_id;
+          const perUnit = Number(c.cantidad) || 0;
+          const totalToReturn = perUnit * producedQty;
+          if (totalToReturn <= 0) continue;
+          // Preferir almacén tipo 'interno' para componentes también
+          let compAlmRow = await sql`SELECT id FROM almacenes WHERE tipo = 'interno' LIMIT 1`;
+          let compAlmId = compAlmRow && compAlmRow[0] ? compAlmRow[0].id : almacenId;
+          if (!compAlmId) continue;
+          const invCompRows = await sql`SELECT * FROM inventario WHERE producto_id = ${compId} AND almacen_id = ${compAlmId} FOR UPDATE`;
+          if (invCompRows && invCompRows.length > 0) {
+            await sql`UPDATE inventario SET stock_fisico = stock_fisico + ${totalToReturn} WHERE id = ${invCompRows[0].id}`;
+          } else {
+            try {
+              await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${compId}, ${compAlmId}, ${totalToReturn}, 0)`;
+            } catch (e) {}
+          }
+          await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${compId}, ${compAlmId}, 'entrada', ${totalToReturn}, ${'Cancelación pedido ' + pedidoId + ' - devolución componentes orden ' + oid})`;
+        }
+      }
+
+      produccionRevertida.push({ orden_id: oid, cantidad: producedQty });
+    }
+
     await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
     await sql`COMMIT`;
 
