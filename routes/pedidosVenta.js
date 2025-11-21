@@ -1216,7 +1216,7 @@ router.post('/:id/cancelar', async (req, res) => {
   }
 });
 
-module.exports = router;
+// export router al final del archivo (se mueve más abajo)
 
 // Crear orden de producción asociada a una línea de pedido
 // POST /api/pedidos-venta/:pedidoId/lineas/:lineaId/ordenes-produccion
@@ -1284,3 +1284,5 @@ router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) =>
     return res.status(500).json({ error: err.message });
   }
 });
+
+module.exports = router;
