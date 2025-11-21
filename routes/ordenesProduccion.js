@@ -21,6 +21,34 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/ordenes-produccion/detailed
+// Devuelve órdenes de producción con nombre del producto terminado y los componentes que usa
+router.get('/detailed', async (req, res) => {
+  try {
+    const ordenes = await sql`SELECT o.*, p.nombre as producto_nombre FROM ordenes_produccion o LEFT JOIN productos p ON p.id = o.producto_terminado_id ORDER BY o.id DESC`;
+    const detailed = [];
+    for (const ord of ordenes) {
+      const componentes = await sql`SELECT fc.*, prod.nombre as materia_nombre FROM formula_componentes fc LEFT JOIN productos prod ON prod.id = fc.materia_prima_id WHERE fc.formula_id = ${ord.formula_id}`;
+      // Calcular cantidad total requerida por la orden (componente.cantidad * orden.cantidad)
+      const componentes_mapped = (componentes || []).map(c => ({
+        materia_prima_id: c.materia_prima_id,
+        materia_nombre: c.materia_nombre || c.nombre || null,
+        cantidad_por_unidad: Number(c.cantidad),
+        unidad: c.unidad || null,
+        cantidad_total: Number(c.cantidad) * Number(ord.cantidad || 0)
+      }));
+      detailed.push({
+        orden: ord,
+        producto_nombre: ord.producto_nombre || null,
+        componentes: componentes_mapped
+      });
+    }
+    res.json(detailed);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const error = validarOrden(req.body);
   if (error) return res.status(400).json({ error });
