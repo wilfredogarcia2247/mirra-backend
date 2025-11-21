@@ -269,7 +269,6 @@ router.post('/', async (req, res) => {
           return res.status(400).json({ error: 'Producto o cantidad inválidos en líneas' });
         }
 
-        // Obtener producto base
         const prodRow = await sql`SELECT id, nombre, precio_venta, costo FROM productos WHERE id = ${productoId} LIMIT 1`;
         if (!prodRow || !prodRow[0]) {
           await sql`ROLLBACK`;
@@ -288,18 +287,12 @@ router.post('/', async (req, res) => {
             await sql`ROLLBACK`;
             return res.status(400).json({ error: 'formula_id inválido en líneas' });
           }
-          // Intentar obtener fórmula que coincida con producto (si aplica)
-          const frow = await sql`SELECT id, nombre, costo, precio_venta, producto_id FROM formulas WHERE id = ${formulaId} LIMIT 1`;
+          const frow = await sql`SELECT id, nombre, costo, precio_venta FROM formulas WHERE id = ${formulaId} LIMIT 1`;
           if (!frow || !frow[0]) {
             await sql`ROLLBACK`;
             return res.status(400).json({ error: `Fórmula no encontrada: ${formulaId}` });
           }
           const f = frow[0];
-          // Si la tabla formulas tiene producto_id y existe, validar coincidencia
-          if (f.producto_id && Number(f.producto_id) !== productoId) {
-            await sql`ROLLBACK`;
-            return res.status(400).json({ error: `Formula ${formulaId} no pertenece al producto ${productoId}` });
-          }
           formulaNombre = f.nombre || null;
           // Si la formula tiene costos/precios específicos, priorizarlos
           if (f.costo != null) costoUnitario = f.costo;
@@ -856,19 +849,15 @@ router.post('/:id/items', async (req, res) => {
       let formulaNombreToSave = null;
 
       if (p.formula_id != null) {
-        const fRow = await sql`SELECT precio_venta, costo, nombre, producto_id FROM formulas WHERE id = ${Number(p.formula_id)} LIMIT 1`;
+        // Preferir datos desde la fórmula si existe. No asumimos que la columna `producto_id` exista en todas las instalaciones,
+        // por eso solicitamos solo precio/costo/nombre (como hace el endpoint público) y no validamos propiedad aquí.
+        const fRow = await sql`SELECT precio_venta, costo, nombre FROM formulas WHERE id = ${Number(p.formula_id)} LIMIT 1`;
         if (fRow && fRow[0]) {
-          // Si la fórmula existe y contiene datos, úsalos
           precioUnitario = fRow[0].precio_venta != null ? fRow[0].precio_venta : null;
           costoUnitario = fRow[0].costo != null ? fRow[0].costo : null;
           nombreProducto = fRow[0].nombre != null ? fRow[0].nombre : null;
           formulaIdToSave = Number(p.formula_id);
           formulaNombreToSave = fRow[0].nombre != null ? fRow[0].nombre : null;
-          // Validar que la fórmula pertenezca al producto si el campo existe
-          if (fRow[0].producto_id && Number(fRow[0].producto_id) !== productoId) {
-            await sql`ROLLBACK`;
-            return res.status(400).json({ error: `Formula ${formulaIdToSave} no pertenece al producto ${productoId}` });
-          }
         }
       }
 
@@ -928,9 +917,8 @@ router.post('/:id/items', async (req, res) => {
     return res.status(201).json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) {}
-    console.error('Error agregando items al pedido:', err && err.message ? err.message : err, err && err.stack ? err.stack : 'no stack');
-    // Dev: incluir stack en la respuesta para facilitar diagnóstico local (remover en producción)
-    return res.status(500).json({ error: err.message, stack: err.stack ? err.stack.split('\n') : null });
+    console.error('Error agregando items al pedido:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
