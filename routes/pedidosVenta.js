@@ -840,42 +840,52 @@ router.post('/:id/items', async (req, res) => {
     try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`; } catch (e) {}
 
     for (const p of productos) {
+      // Comportamiento consistente con endpoint público: guardar snapshot preferiendo datos de la fórmula cuando exista.
       const productoId = Number(p.producto_id);
       const cantidad = Number(p.cantidad);
 
-      const prodRow = await sql`SELECT id, nombre, precio_venta, costo FROM productos WHERE id = ${productoId} LIMIT 1`;
-      if (!prodRow || !prodRow[0]) {
+      if (isNaN(productoId) || isNaN(cantidad) || cantidad <= 0) {
         await sql`ROLLBACK`;
-        return res.status(400).json({ error: `Producto no encontrado: ${productoId}` });
+        return res.status(400).json({ error: 'Producto o cantidad inválidos en líneas' });
       }
-      const prod = prodRow[0];
 
-      let formulaId = null;
-      let formulaNombre = null;
-      let costoUnitario = prod.costo;
-      let precioVenta = prod.precio_venta;
+      let precioUnitario = null;
+      let costoUnitario = null;
+      let nombreProducto = null;
+      let formulaIdToSave = null;
+      let formulaNombreToSave = null;
+
       if (p.formula_id != null) {
-        formulaId = Number(p.formula_id);
-        if (isNaN(formulaId)) {
-          await sql`ROLLBACK`;
-          return res.status(400).json({ error: 'formula_id inválido en líneas' });
+        const fRow = await sql`SELECT precio_venta, costo, nombre, producto_id FROM formulas WHERE id = ${Number(p.formula_id)} LIMIT 1`;
+        if (fRow && fRow[0]) {
+          // Si la fórmula existe y contiene datos, úsalos
+          precioUnitario = fRow[0].precio_venta != null ? fRow[0].precio_venta : null;
+          costoUnitario = fRow[0].costo != null ? fRow[0].costo : null;
+          nombreProducto = fRow[0].nombre != null ? fRow[0].nombre : null;
+          formulaIdToSave = Number(p.formula_id);
+          formulaNombreToSave = fRow[0].nombre != null ? fRow[0].nombre : null;
+          // Validar que la fórmula pertenezca al producto si el campo existe
+          if (fRow[0].producto_id && Number(fRow[0].producto_id) !== productoId) {
+            await sql`ROLLBACK`;
+            return res.status(400).json({ error: `Formula ${formulaIdToSave} no pertenece al producto ${productoId}` });
+          }
         }
-        const frow = await sql`SELECT id, nombre, costo, precio_venta, producto_id FROM formulas WHERE id = ${formulaId} LIMIT 1`;
-        if (!frow || !frow[0]) {
-          await sql`ROLLBACK`;
-          return res.status(400).json({ error: `Fórmula no encontrada: ${formulaId}` });
-        }
-        const f = frow[0];
-        if (f.producto_id && Number(f.producto_id) !== productoId) {
-          await sql`ROLLBACK`;
-          return res.status(400).json({ error: `Formula ${formulaId} no pertenece al producto ${productoId}` });
-        }
-        formulaNombre = f.nombre || null;
-        if (f.costo != null) costoUnitario = f.costo;
-        if (f.precio_venta != null) precioVenta = f.precio_venta;
       }
 
-      await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, nombre_producto, precio_venta, costo_unitario, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${prod.nombre}, ${precioVenta || null}, ${costoUnitario || null}, ${formulaId || null}, ${formulaNombre || null}, ${null}, ${false})`;
+      // Si faltan datos, rellenar desde la tabla productos
+      if (precioUnitario == null || costoUnitario == null || nombreProducto == null) {
+        const prodRow = await sql`SELECT precio_venta, costo, nombre FROM productos WHERE id = ${productoId} LIMIT 1`;
+        if (!prodRow || !prodRow[0]) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: `Producto no encontrado: ${productoId}` });
+        }
+        const prod = prodRow[0];
+        precioUnitario = precioUnitario == null ? prod.precio_venta : precioUnitario;
+        costoUnitario = costoUnitario == null ? prod.costo : costoUnitario;
+        nombreProducto = nombreProducto == null ? prod.nombre : nombreProducto;
+      }
+
+      await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${costoUnitario || null}, ${precioUnitario || null}, ${nombreProducto || null}, ${formulaIdToSave || null}, ${formulaNombreToSave || null}, ${null}, ${false})`;
     }
 
     await sql`COMMIT`;
@@ -918,8 +928,9 @@ router.post('/:id/items', async (req, res) => {
     return res.status(201).json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) {}
-    console.error('Error agregando items al pedido:', err && err.message ? err.message : err);
-    return res.status(500).json({ error: err.message });
+    console.error('Error agregando items al pedido:', err && err.message ? err.message : err, err && err.stack ? err.stack : 'no stack');
+    // Dev: incluir stack en la respuesta para facilitar diagnóstico local (remover en producción)
+    return res.status(500).json({ error: err.message, stack: err.stack ? err.stack.split('\n') : null });
   }
 });
 
