@@ -160,64 +160,66 @@ router.get('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
     } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
     const pedidos = await sql`SELECT * FROM pedidos_venta`;
     const pedidosConDetalle = [];
     for (const p of pedidos) {
       const productos = await sql`
-         SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
-           COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
-           COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-           COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-           COALESCE(pv.costo_unitario, prod.costo) AS costo,
-           prod.image_url,
-           (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_creada
-         FROM pedido_venta_productos pv
-         LEFT JOIN productos prod ON prod.id = pv.producto_id
-         LEFT JOIN formulas f ON f.id = pv.formula_id
-         LEFT JOIN (
-           SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
-           FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
-         ) op ON op.producto_terminado_id = prod.id
-         WHERE pv.pedido_venta_id = ${p.id}
-      `;
-      // Normalizar tipos y calcular subtotales
-      let total = 0;
-      const productosMapeados = productos.map((item) => {
-        const cantidad = Number(item.cantidad);
-        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
-        const costo = item.costo != null ? parseFloat(item.costo) : null;
-        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
-        total += subtotal;
-        return {
-          id: item.id,
-          pedido_venta_id: item.pedido_venta_id,
-          producto_id: item.producto_id,
-          formula_id: item.formula_id || null,
-          formula_nombre: item.formula_nombre || null,
-          cantidad,
-          producto_nombre: item.producto_nombre,
-          produccion_creada: !!item.produccion_creada,
-          precio_venta: isNaN(precio) ? null : precio,
-          costo: costo,
-          image_url: item.image_url,
-          subtotal,
-        };
-      });
+          SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+            COALESCE(pv.costo_unitario, prod.costo) AS costo,
+            pv.orden_produccion_id,
+            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+            prod.image_url,
+            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+           FROM pedido_venta_productos pv
+           LEFT JOIN productos prod ON prod.id = pv.producto_id
+           LEFT JOIN formulas f ON f.id = pv.formula_id
+           LEFT JOIN (
+             SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+             FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+           ) op ON op.producto_terminado_id = prod.id
+           WHERE pv.pedido_venta_id = ${p.id}
+        `;
+        // Normalizar tipos y calcular subtotales
+        let total = 0;
+        const productosMapeados = productos.map((item) => {
+          const cantidad = Number(item.cantidad);
+          const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+          const costo = item.costo != null ? parseFloat(item.costo) : null;
+          const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+          total += subtotal;
+          return {
+            id: item.id,
+            pedido_venta_id: item.pedido_venta_id,
+            producto_id: item.producto_id,
+            formula_id: item.formula_id || null,
+            formula_nombre: item.formula_nombre || null,
+            orden_produccion_id: item.orden_produccion_id || null,
+            produccion_creada: !!item.produccion_creada,
+            cantidad,
+            producto_nombre: item.producto_nombre,
+            produccion_completada: !!item.produccion_completada,
+            precio_venta: isNaN(precio) ? null : precio,
+            costo: costo,
+            image_url: item.image_url,
+            subtotal,
+          };
+        });
 
-      // Añadir lista de componentes (nombres) por línea si la línea tiene fórmula asociada
-      for (const prodItem of productosMapeados) {
-        prodItem.componentes = await getComponentesForLine(
-          prodItem.producto_id,
-          prodItem.formula_id,
-          prodItem.formula_nombre,
-          prodItem.producto_nombre
-        );
-      }
-      pedidosConDetalle.push({
-        ...p,
-        productos: productosMapeados,
-        total,
-      });
+        // No incluir componentes en la respuesta: el front usará `formula_id` para crear la orden de producción
+        pedidosConDetalle.push({
+          ...p,
+          productos: productosMapeados,
+          total,
+        });
     }
     res.json(pedidosConDetalle);
   } catch (err) {
@@ -304,7 +306,7 @@ router.post('/', async (req, res) => {
           if (f.precio_venta != null) precioVenta = f.precio_venta;
         }
 
-        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, nombre_producto, precio_venta, costo_unitario, formula_id, formula_nombre) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${prod.nombre}, ${precioVenta || null}, ${costoUnitario || null}, ${formulaId || null}, ${formulaNombre || null})`;
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, nombre_producto, precio_venta, costo_unitario, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${prod.nombre}, ${precioVenta || null}, ${costoUnitario || null}, ${formulaId || null}, ${formulaNombre || null}, ${null}, ${false})`;
       }
 
       await sql`COMMIT`;
@@ -356,6 +358,13 @@ router.post('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
+    // Asegurar columnas de orden/flag por si la migración no se ejecutó en este entorno
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
     const pedido = await sql`SELECT * FROM pedidos_venta WHERE id = ${req.params.id}`;
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const productos = await sql`
@@ -364,8 +373,10 @@ router.get('/:id', async (req, res) => {
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo,
+             pv.orden_produccion_id,
+             COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
              prod.image_url,
-             (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_creada
+             (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
       FROM pedido_venta_productos pv
       LEFT JOIN productos prod ON prod.id = pv.producto_id
       LEFT JOIN formulas f ON f.id = pv.formula_id
@@ -388,24 +399,18 @@ router.get('/:id', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        orden_produccion_id: item.orden_produccion_id || null,
+        produccion_creada: !!item.produccion_creada,
         cantidad,
         producto_nombre: item.producto_nombre,
+        produccion_completada: !!item.produccion_completada,
         precio_venta: isNaN(precio) ? null : precio,
         costo: costo,
         image_url: item.image_url,
-        produccion_creada: !!item.produccion_creada,
         subtotal,
       };
     });
-    // Añadir componentes por línea en detalle de pedido (GET /:id)
-    for (const prodItem of productosMapeados) {
-      prodItem.componentes = await getComponentesForLine(
-        prodItem.producto_id,
-        prodItem.formula_id,
-        prodItem.formula_nombre,
-        prodItem.producto_nombre
-      );
-    }
+    // No incluir componentes: el front recibirá `formula_id` y `formula_nombre` para crear la orden de producción
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
     res.json(pedidoObj);
   } catch (err) {
@@ -1085,3 +1090,70 @@ router.post('/:id/cancelar', async (req, res) => {
 });
 
 module.exports = router;
+
+// Crear orden de producción asociada a una línea de pedido
+// POST /api/pedidos-venta/:pedidoId/lineas/:lineaId/ordenes-produccion
+router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) => {
+  const pedidoId = Number(req.params.pedidoId);
+  const lineaId = Number(req.params.lineaId);
+  if (isNaN(pedidoId) || isNaN(lineaId)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    await sql`BEGIN`;
+    // Bloquear pedido y línea
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const lineaRows = await sql`SELECT * FROM pedido_venta_productos WHERE id = ${lineaId} AND pedido_venta_id = ${pedidoId} FOR UPDATE`;
+    if (!lineaRows || lineaRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Línea de pedido no encontrada' });
+    }
+    const linea = lineaRows[0];
+    if (!linea.formula_id) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'La línea no tiene formula_id asociada' });
+    }
+
+    // Crear orden de producción usando la fórmula y la cantidad de la línea
+    const cantidad = Number(req.body.cantidad != null ? req.body.cantidad : linea.cantidad);
+    if (isNaN(cantidad) || cantidad <= 0) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Cantidad inválida para la orden' });
+    }
+
+    // Insertar orden
+    const ordenInserted = await sql`
+      INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
+      VALUES (${linea.producto_id}, ${cantidad}, ${linea.formula_id}, ${'Pendiente'}, NOW()) RETURNING *
+    `;
+    const orden = ordenInserted && ordenInserted[0] ? ordenInserted[0] : null;
+    if (!orden) {
+      await sql`ROLLBACK`;
+      return res.status(500).json({ error: 'No se pudo crear la orden de producción' });
+    }
+
+    // Asegurar columnas antes de actualizar la línea (defensivo)
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
+
+    // Actualizar la línea del pedido para vincular la orden y marcar produccion_creada
+    await sql`
+      UPDATE pedido_venta_productos SET orden_produccion_id = ${orden.id}, produccion_creada = TRUE WHERE id = ${lineaId}
+    `;
+
+    await sql`COMMIT`;
+    return res.status(201).json({ ok: true, orden });
+  } catch (err) {
+    try {
+      await sql`ROLLBACK`;
+    } catch (e) {}
+    console.error('Error creando orden desde pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: err.message });
+  }
+});

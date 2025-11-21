@@ -53,6 +53,12 @@ router.post('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
     } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
     // Note: no legacy tamano columns required here.
     const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Compatibilidad: aceptar `productos` o `lineas`
@@ -111,17 +117,19 @@ router.post('/', async (req, res) => {
           }
         }
         // insertar la línea (guardando formula_id/formula_nombre si se proporcionó)
-        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave})`;
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave}, ${null}, ${false})`;
       }
       await sql`COMMIT`;
 
       const productosDetalle = await sql`
-        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
+        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
                COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
                COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
                COALESCE(pv.costo_unitario, prod.costo) AS costo,
+               pv.orden_produccion_id,
+               COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
                prod.image_url,
-               (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_creada
+               (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
         FROM pedido_venta_productos pv
         LEFT JOIN productos prod ON prod.id = pv.producto_id
         LEFT JOIN (
@@ -141,70 +149,19 @@ router.post('/', async (req, res) => {
           id: item.id,
           pedido_venta_id: item.pedido_venta_id,
           producto_id: item.producto_id,
+          formula_id: item.formula_id || null,
+          formula_nombre: item.formula_nombre || null,
+          orden_produccion_id: item.orden_produccion_id || null,
+          produccion_creada: !!item.produccion_creada,
           cantidad,
           producto_nombre: item.producto_nombre,
           precio_venta: isNaN(precio) ? null : precio,
           costo: costo,
           image_url: item.image_url,
-          produccion_creada: !!item.produccion_creada,
-          componentes: [],
           subtotal,
         };
       });
-      // Añadir nombres de componentes si la línea tiene formula_id guardada o se puede resolver por nombre
-      for (const prodItem of productosMapeados) {
-        prodItem.componentes = prodItem.componentes || [];
-        let formulaIdToUse = prodItem.formula_id || null;
-        if (!formulaIdToUse && prodItem.producto_nombre) {
-          try {
-            const frow = await sql`
-              SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre = ${prodItem.producto_nombre} LIMIT 1
-            `;
-            if (frow && frow[0] && frow[0].id) formulaIdToUse = frow[0].id;
-          } catch (e) {}
-        }
-        if (formulaIdToUse) {
-          try {
-            let comps = await sql`
-              SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                     COALESCE(mp.nombre, ing.nombre) AS nombre,
-                     CASE WHEN mp.id IS NOT NULL THEN 'producto' WHEN ing.id IS NOT NULL THEN 'ingrediente' ELSE NULL END AS tipo
-              FROM formula_componentes fc
-              LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
-              LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-              WHERE fc.formula_id = ${formulaIdToUse}
-            `;
-            if ((!comps || comps.length === 0) && prodItem.producto_nombre) {
-              try {
-                const likePattern = '%' + prodItem.producto_nombre + '%';
-                const frow = await sql`
-                  SELECT id FROM formulas WHERE producto_terminado_id = ${prodItem.producto_id} AND nombre ILIKE ${likePattern} LIMIT 1
-                `;
-                if (frow && frow[0] && frow[0].id) {
-                  comps = await sql`
-                    SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                           COALESCE(mp.nombre, ing.nombre) AS nombre,
-                           CASE WHEN mp.id IS NOT NULL THEN 'producto' WHEN ing.id IS NOT NULL THEN 'ingrediente' ELSE NULL END AS tipo
-                    FROM formula_componentes fc
-                    LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
-                    LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-                    WHERE fc.formula_id = ${frow[0].id}
-                  `;
-                }
-              } catch (e) {}
-            }
-            prodItem.componentes = (comps || []).map((c) => ({
-              materia_prima_id: c.materia_prima_id,
-              nombre: c.nombre || null,
-              tipo: c.tipo || null,
-              cantidad: c.cantidad != null ? Number(c.cantidad) : null,
-              unidad: c.unidad || null,
-            }));
-          } catch (e) {
-            prodItem.componentes = [];
-          }
-        }
-      }
+      // No incluir componentes en la respuesta pública: el front usará `formula_id` para crear la orden de producción
       const pedidoObj = {
         ...pedido[0],
         productos: productosMapeados,

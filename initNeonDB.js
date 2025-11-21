@@ -272,6 +272,12 @@ async function initDB() {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN nombre_producto TEXT;`;
     } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN orden_produccion_id INT;`;
+    } catch (e) {}
+    try {
+      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN produccion_creada BOOLEAN DEFAULT FALSE;`;
+    } catch (e) {}
     // Semillas básicas para productos (sin proveedor)
     await sql`INSERT INTO productos (nombre, unidad, stock, costo) VALUES
       ('Esencia de Jazmín', 'ml', 1000, 0.5),
