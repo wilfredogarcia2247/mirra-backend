@@ -115,3 +115,153 @@ router.delete('/:id', async (req, res) => {
 });
 
 module.exports = router;
+
+// --- Rutas para gestionar `usuario_modulos` ---
+// Lista de módulos disponibles (metadato para el frontend)
+router.get('/available-modulos', (req, res) => {
+  const available = [
+    'dashboard',
+    'tasas_cambio',
+    'bancos',
+    'marcas',
+    'categorias',
+    'almacenes',
+    'productos',
+    'formulas',
+    'pedidos',
+  ];
+  return res.json({ available_modulos: available });
+});
+
+// GET /api/users/:id/modulos -> obtener permisos (admin o propietario)
+router.get('/:id/modulos', async (req, res) => {
+  const id = Number(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  // permitir admin o el propio usuario
+  if (!(req.user && (req.user.rol === 'admin' || Number(req.user.id) === id)))
+    return res.status(403).json({ error: 'No autorizado' });
+  try {
+    const rows = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
+    const available = [
+      'dashboard',
+      'tasas_cambio',
+      'bancos',
+      'marcas',
+      'categorias',
+      'almacenes',
+      'productos',
+      'formulas',
+      'pedidos',
+    ];
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado', available_modulos: available });
+    return res.json({ modulos: rows[0], available_modulos: available });
+  } catch (err) {
+    console.error('Error leyendo usuario_modulos:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error leyendo permisos' });
+  }
+});
+
+// POST /api/users/:id/modulos -> upsert permisos (admin only)
+router.post('/:id/modulos', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const id = Number(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  const allowed = [
+    'dashboard',
+    'tasas_cambio',
+    'bancos',
+    'marcas',
+    'categorias',
+    'almacenes',
+    'productos',
+    'formulas',
+    'pedidos',
+  ];
+  const body = req.body || {};
+  // construir fila completa: si falta un flag, se asume false
+  const row = { usuario_id: id };
+  for (const k of allowed) row[k] = body[k] != null ? !!body[k] : false;
+
+  try {
+    // eliminar cualquier fila previa y reinsertar (upsert sencillo)
+    await sql`BEGIN`;
+    await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
+    const inserted = await sql`
+      INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, created_at, updated_at)
+      VALUES (
+        ${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, NOW(), NOW()
+      ) RETURNING *
+    `;
+    await sql`COMMIT`;
+    return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) {}
+    console.error('Error guardando usuario_modulos:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error guardando permisos' });
+  }
+});
+
+// PUT /api/users/:id/modulos -> reemplazo completo (admin only)
+router.put('/:id/modulos', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const id = Number(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  const allowed = [
+    'dashboard',
+    'tasas_cambio',
+    'bancos',
+    'marcas',
+    'categorias',
+    'almacenes',
+    'productos',
+    'formulas',
+    'pedidos',
+  ];
+  const body = req.body || {};
+  // require at least one field
+  const hasAny = allowed.some((k) => Object.prototype.hasOwnProperty.call(body, k));
+  if (!hasAny) return res.status(400).json({ error: 'Nada para actualizar' });
+  const row = { usuario_id: id };
+  for (const k of allowed) row[k] = body[k] != null ? !!body[k] : false;
+  try {
+    await sql`BEGIN`;
+    const exists = await sql`SELECT id FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
+    if (exists && exists.length > 0) {
+      await sql`
+        UPDATE usuario_modulos SET
+          dashboard = ${row.dashboard}, tasas_cambio = ${row.tasas_cambio}, bancos = ${row.bancos}, marcas = ${row.marcas}, categorias = ${row.categorias}, almacenes = ${row.almacenes}, productos = ${row.productos}, formulas = ${row.formulas}, pedidos = ${row.pedidos}, updated_at = NOW()
+        WHERE usuario_id = ${id}
+      `;
+      const updated = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
+      await sql`COMMIT`;
+      return res.json(updated && updated[0] ? updated[0] : { ok: true });
+    } else {
+      const inserted = await sql`
+        INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, created_at, updated_at)
+        VALUES (${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, NOW(), NOW()) RETURNING *
+      `;
+      await sql`COMMIT`;
+      return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
+    }
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) {}
+    console.error('Error reemplazando usuario_modulos:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error guardando permisos' });
+  }
+});
+
+// DELETE /api/users/:id/modulos -> eliminar permisos (admin only)
+router.delete('/:id/modulos', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const id = Number(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('Error eliminando usuario_modulos:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error eliminando permisos' });
+  }
+});
+
+
