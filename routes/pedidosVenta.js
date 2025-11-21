@@ -43,14 +43,32 @@ function validarPagoObj(pago) {
 async function getComponentesForLine(productoId, formulaId, formulaNombre, productoNombre) {
   try {
     const tryQuery = async (fid) => {
-      return await sql`
-        SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-               COALESCE(mp.nombre, ing.nombre) AS nombre
-        FROM formula_componentes fc
-        LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
-        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
-        WHERE fc.formula_id = ${fid}
-      `;
+      try {
+        const res = await sql`
+          SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                 COALESCE(mp.nombre, ing.nombre) AS nombre,
+                 CASE WHEN mp.id IS NOT NULL THEN 'producto' WHEN ing.id IS NOT NULL THEN 'ingrediente' ELSE NULL END AS tipo
+         FROM formula_componentes fc
+          LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+          LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+          WHERE fc.formula_id = ${fid}
+        `;
+        return res;
+      } catch (innerErr) {
+        // Fallback: si la tabla `ingredientes` no existe, ejecutar consulta que solo une con `productos`.
+        if (innerErr && String(innerErr.message).toLowerCase().includes('ingredientes')) {
+          const res2 = await sql`
+            SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
+                   mp.nombre AS nombre,
+                   'producto' AS tipo
+            FROM formula_componentes fc
+            LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
+            WHERE fc.formula_id = ${fid}
+          `;
+          return res2;
+        }
+        throw innerErr;
+      }
     };
 
     let useFormulaId = formulaId || null;
@@ -92,6 +110,7 @@ async function getComponentesForLine(productoId, formulaId, formulaNombre, produ
         return comps.map((c) => ({
           materia_prima_id: c.materia_prima_id,
           nombre: c.nombre || null,
+          tipo: c.tipo || null,
           cantidad: c.cantidad != null ? Number(c.cantidad) : null,
           unidad: c.unidad || null,
         }));
@@ -109,6 +128,7 @@ async function getComponentesForLine(productoId, formulaId, formulaNombre, produ
             return comps.map((c) => ({
               materia_prima_id: c.materia_prima_id,
               nombre: c.nombre || null,
+              tipo: c.tipo || null,
               cantidad: c.cantidad != null ? Number(c.cantidad) : null,
               unidad: c.unidad || null,
             }));
@@ -339,7 +359,8 @@ router.get('/:id', async (req, res) => {
     const pedido = await sql`SELECT * FROM pedidos_venta WHERE id = ${req.params.id}`;
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const productos = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+             COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo,
@@ -347,6 +368,7 @@ router.get('/:id', async (req, res) => {
              (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_creada
       FROM pedido_venta_productos pv
       LEFT JOIN productos prod ON prod.id = pv.producto_id
+      LEFT JOIN formulas f ON f.id = pv.formula_id
       LEFT JOIN (
         SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
         FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
@@ -364,6 +386,8 @@ router.get('/:id', async (req, res) => {
         id: item.id,
         pedido_venta_id: item.pedido_venta_id,
         producto_id: item.producto_id,
+        formula_id: item.formula_id || null,
+        formula_nombre: item.formula_nombre || null,
         cantidad,
         producto_nombre: item.producto_nombre,
         precio_venta: isNaN(precio) ? null : precio,

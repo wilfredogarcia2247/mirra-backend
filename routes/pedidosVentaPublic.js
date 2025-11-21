@@ -167,7 +167,8 @@ router.post('/', async (req, res) => {
           try {
             let comps = await sql`
               SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                     COALESCE(mp.nombre, ing.nombre) AS nombre
+                     COALESCE(mp.nombre, ing.nombre) AS nombre,
+                     CASE WHEN mp.id IS NOT NULL THEN 'producto' WHEN ing.id IS NOT NULL THEN 'ingrediente' ELSE NULL END AS tipo
               FROM formula_componentes fc
               LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
               LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
@@ -182,7 +183,8 @@ router.post('/', async (req, res) => {
                 if (frow && frow[0] && frow[0].id) {
                   comps = await sql`
                     SELECT fc.materia_prima_id, fc.cantidad, fc.unidad,
-                           COALESCE(mp.nombre, ing.nombre) AS nombre
+                           COALESCE(mp.nombre, ing.nombre) AS nombre,
+                           CASE WHEN mp.id IS NOT NULL THEN 'producto' WHEN ing.id IS NOT NULL THEN 'ingrediente' ELSE NULL END AS tipo
                     FROM formula_componentes fc
                     LEFT JOIN productos mp ON mp.id = fc.materia_prima_id
                     LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
@@ -194,6 +196,7 @@ router.post('/', async (req, res) => {
             prodItem.componentes = (comps || []).map((c) => ({
               materia_prima_id: c.materia_prima_id,
               nombre: c.nombre || null,
+              tipo: c.tipo || null,
               cantidad: c.cantidad != null ? Number(c.cantidad) : null,
               unidad: c.unidad || null,
             }));
