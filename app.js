@@ -83,6 +83,8 @@ app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 // Rutas protegidas
 app.use('/api/productos', authMiddleware, require('./routes/productos'));
 app.use('/api/almacenes', authMiddleware, require('./routes/almacenes'));
+// Usuarios (lista) - requiere token
+app.use('/api/users', authMiddleware, require('./routes/users'));
 app.use('/api/formulas', authMiddleware, require('./routes/formulas'));
 app.use('/api/ordenes-produccion', authMiddleware, require('./routes/ordenesProduccion'));
 app.use('/api/inventario', authMiddleware, require('./routes/inventario'));
