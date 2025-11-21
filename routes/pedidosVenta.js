@@ -796,6 +796,133 @@ router.post('/:id/pagos', async (req, res) => {
   }
 });
 
+// POST /api/pedidos-venta/:id/items -> agregar más items (líneas) a un pedido existente
+router.post('/:id/items', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+
+  // aceptar body { productos: [...] } o un solo objeto { producto: {...} }
+  let productos = [];
+  if (Array.isArray(req.body.productos)) productos = req.body.productos;
+  else if (req.body.producto) productos = [req.body.producto];
+  else if (Array.isArray(req.body)) productos = req.body;
+
+  if (!Array.isArray(productos) || productos.length === 0)
+    return res.status(400).json({ error: 'Productos requeridos' });
+
+  // validar formato básico de las líneas
+  for (const p of productos) {
+    if (!p.producto_id || isNaN(Number(p.producto_id))) return res.status(400).json({ error: 'ID de producto requerido en líneas' });
+    if (!p.cantidad || isNaN(Number(p.cantidad)) || Number(p.cantidad) <= 0) return res.status(400).json({ error: 'Cantidad requerida e inválida en líneas' });
+    if (p.formula_id != null && isNaN(Number(p.formula_id))) return res.status(400).json({ error: 'formula_id inválido en líneas' });
+  }
+
+  try {
+    await sql`BEGIN`;
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const pedido = pedidoRows[0];
+    if (pedido.estado === 'Completado' || pedido.estado === 'Cancelado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: `No se pueden agregar líneas a un pedido con estado ${pedido.estado}` });
+    }
+
+    // asegurar columnas defensivas
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`; } catch (e) {}
+
+    for (const p of productos) {
+      const productoId = Number(p.producto_id);
+      const cantidad = Number(p.cantidad);
+
+      const prodRow = await sql`SELECT id, nombre, precio_venta, costo FROM productos WHERE id = ${productoId} LIMIT 1`;
+      if (!prodRow || !prodRow[0]) {
+        await sql`ROLLBACK`;
+        return res.status(400).json({ error: `Producto no encontrado: ${productoId}` });
+      }
+      const prod = prodRow[0];
+
+      let formulaId = null;
+      let formulaNombre = null;
+      let costoUnitario = prod.costo;
+      let precioVenta = prod.precio_venta;
+      if (p.formula_id != null) {
+        formulaId = Number(p.formula_id);
+        if (isNaN(formulaId)) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: 'formula_id inválido en líneas' });
+        }
+        const frow = await sql`SELECT id, nombre, costo, precio_venta, producto_id FROM formulas WHERE id = ${formulaId} LIMIT 1`;
+        if (!frow || !frow[0]) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: `Fórmula no encontrada: ${formulaId}` });
+        }
+        const f = frow[0];
+        if (f.producto_id && Number(f.producto_id) !== productoId) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: `Formula ${formulaId} no pertenece al producto ${productoId}` });
+        }
+        formulaNombre = f.nombre || null;
+        if (f.costo != null) costoUnitario = f.costo;
+        if (f.precio_venta != null) precioVenta = f.precio_venta;
+      }
+
+      await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, nombre_producto, precio_venta, costo_unitario, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${prod.nombre}, ${precioVenta || null}, ${costoUnitario || null}, ${formulaId || null}, ${formulaNombre || null}, ${null}, ${false})`;
+    }
+
+    await sql`COMMIT`;
+
+    // devolver pedido actualizado (reutilizar lógica de GET /:id)
+    const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
+    const productosDetalle = await sql`
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+             COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+             COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+             COALESCE(pv.costo_unitario, prod.costo) AS costo, pv.orden_produccion_id, COALESCE(pv.produccion_creada, FALSE) AS produccion_creada, prod.image_url
+      FROM pedido_venta_productos pv
+      LEFT JOIN productos prod ON prod.id = pv.producto_id
+      WHERE pv.pedido_venta_id = ${pedidoId}
+    `;
+    let total = 0;
+    const productosMapeados = (productosDetalle || []).map((item) => {
+      const cantidad = Number(item.cantidad);
+      const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+      const costo = item.costo != null ? parseFloat(item.costo) : null;
+      const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+      total += subtotal;
+      return {
+        id: item.id,
+        pedido_venta_id: item.pedido_venta_id,
+        producto_id: item.producto_id,
+        formula_id: item.formula_id || null,
+        formula_nombre: item.formula_nombre || null,
+        orden_produccion_id: item.orden_produccion_id || null,
+        produccion_creada: !!item.produccion_creada,
+        cantidad,
+        producto_nombre: item.producto_nombre,
+        precio_venta: isNaN(precio) ? null : precio,
+        costo: costo,
+        image_url: item.image_url,
+        subtotal,
+      };
+    });
+    const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
+    return res.status(201).json(pedidoObj);
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) {}
+    console.error('Error agregando items al pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/pedidos-venta/:id/pagos -> listar pagos asociados a un pedido
 router.get('/:id/pagos', async (req, res) => {
   const pedidoId = Number(req.params.id);
