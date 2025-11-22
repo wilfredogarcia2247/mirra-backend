@@ -94,7 +94,7 @@ router.put('/:id', async (req, res) => {
     await sql`COMMIT`;
     return res.json(updated && updated[0] ? updated[0] : { ok: true });
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error actualizando usuario:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error actualizando usuario' });
   }
@@ -129,6 +129,7 @@ router.get('/available-modulos', (req, res) => {
     'productos',
     'formulas',
     'pedidos',
+    'usuarios',
   ];
   return res.json({ available_modulos: available });
 });
@@ -152,6 +153,7 @@ router.get('/:id/modulos', async (req, res) => {
       'productos',
       'formulas',
       'pedidos',
+      'usuarios',
     ];
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado', available_modulos: available });
     return res.json({ modulos: rows[0], available_modulos: available });
@@ -176,6 +178,7 @@ router.post('/:id/modulos', async (req, res) => {
     'productos',
     'formulas',
     'pedidos',
+    'usuarios',
   ];
   const body = req.body || {};
   // construir fila completa: si falta un flag, se asume false
@@ -195,7 +198,7 @@ router.post('/:id/modulos', async (req, res) => {
     await sql`COMMIT`;
     return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error guardando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
   }
@@ -244,7 +247,7 @@ router.put('/:id/modulos', async (req, res) => {
       return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
     }
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error reemplazando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
   }
