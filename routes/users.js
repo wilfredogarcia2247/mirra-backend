@@ -132,13 +132,11 @@ router.get('/available-modulos', (req, res) => {
   return res.json({ available_modulos: available });
 });
 
-// GET /api/users/:id/modulos -> obtener permisos (admin o propietario)
+// GET /api/users/:id/modulos -> obtener módulos habilitados para un usuario
 router.get('/:id/modulos', async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-  // permitir admin o el propio usuario
-  if (!(req.user && (req.user.rol === 'admin' || Number(req.user.id) === id)))
-    return res.status(403).json({ error: 'No autorizado' });
+
   try {
     const rows = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
     const available = [
@@ -153,17 +151,24 @@ router.get('/:id/modulos', async (req, res) => {
       'pedidos',
       'usuarios',
     ];
-    if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado', available_modulos: available });
-    return res.json({ modulos: rows[0], available_modulos: available });
+
+    // Si no existe registro, retornar array vacío
+    if (!rows || rows.length === 0) {
+      return res.json({ modulos: [], available_modulos: available });
+    }
+
+    // Filtrar solo los módulos que están en true
+    const modulosHabilitados = available.filter(modulo => rows[0][modulo] === true);
+
+    return res.json({ modulos: modulosHabilitados, available_modulos: available });
   } catch (err) {
     console.error('Error leyendo usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error leyendo permisos' });
   }
 });
 
-// POST /api/users/:id/modulos -> upsert permisos (admin only)
+// POST /api/users/:id/modulos -> upsert permisos
 router.post('/:id/modulos', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   const allowed = [
@@ -202,9 +207,8 @@ router.post('/:id/modulos', async (req, res) => {
   }
 });
 
-// PUT /api/users/:id/modulos -> reemplazo completo (admin only)
+// PUT /api/users/:id/modulos -> reemplazo completo
 router.put('/:id/modulos', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   const allowed = [
@@ -252,9 +256,8 @@ router.put('/:id/modulos', async (req, res) => {
   }
 });
 
-// DELETE /api/users/:id/modulos -> eliminar permisos (admin only)
+// DELETE /api/users/:id/modulos -> eliminar permisos
 router.delete('/:id/modulos', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
