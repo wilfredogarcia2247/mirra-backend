@@ -114,8 +114,6 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-module.exports = router;
-
 // --- Rutas para gestionar `usuario_modulos` ---
 // Lista de módulos disponibles (metadato para el frontend)
 router.get('/available-modulos', (req, res) => {
@@ -190,9 +188,9 @@ router.post('/:id/modulos', async (req, res) => {
     await sql`BEGIN`;
     await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
     const inserted = await sql`
-      INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, created_at, updated_at)
+      INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, usuarios, created_at, updated_at)
       VALUES (
-        ${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, NOW(), NOW()
+        ${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, ${row.usuarios}, NOW(), NOW()
       ) RETURNING *
     `;
     await sql`COMMIT`;
@@ -219,6 +217,7 @@ router.put('/:id/modulos', async (req, res) => {
     'productos',
     'formulas',
     'pedidos',
+    'usuarios',
   ];
   const body = req.body || {};
   // require at least one field
@@ -232,7 +231,7 @@ router.put('/:id/modulos', async (req, res) => {
     if (exists && exists.length > 0) {
       await sql`
         UPDATE usuario_modulos SET
-          dashboard = ${row.dashboard}, tasas_cambio = ${row.tasas_cambio}, bancos = ${row.bancos}, marcas = ${row.marcas}, categorias = ${row.categorias}, almacenes = ${row.almacenes}, productos = ${row.productos}, formulas = ${row.formulas}, pedidos = ${row.pedidos}, updated_at = NOW()
+          dashboard = ${row.dashboard}, tasas_cambio = ${row.tasas_cambio}, bancos = ${row.bancos}, marcas = ${row.marcas}, categorias = ${row.categorias}, almacenes = ${row.almacenes}, productos = ${row.productos}, formulas = ${row.formulas}, pedidos = ${row.pedidos}, usuarios = ${row.usuarios}, updated_at = NOW()
         WHERE usuario_id = ${id}
       `;
       const updated = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
@@ -240,8 +239,8 @@ router.put('/:id/modulos', async (req, res) => {
       return res.json(updated && updated[0] ? updated[0] : { ok: true });
     } else {
       const inserted = await sql`
-        INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, created_at, updated_at)
-        VALUES (${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, NOW(), NOW()) RETURNING *
+        INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, usuarios, created_at, updated_at)
+        VALUES (${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, ${row.usuarios}, NOW(), NOW()) RETURNING *
       `;
       await sql`COMMIT`;
       return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
@@ -266,5 +265,7 @@ router.delete('/:id/modulos', async (req, res) => {
     return res.status(500).json({ error: 'Error eliminando permisos' });
   }
 });
+
+module.exports = router;
 
 
