@@ -24,12 +24,33 @@ function validarFormula(body) {
 
 router.get('/', async (req, res) => {
   try {
-    // La tabla `tamanos` puede no existir en este esquema; las "versiones/tamaños" se representan ahora como filas en `formulas`.
-    const formulas =
-      await sql`SELECT f.* FROM formulas f ORDER BY f.producto_terminado_id, f.nombre`;
-    for (const f of formulas) {
-      f.componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${f.id}`;
-      // Las propiedades de tamaño ahora están en la propia fórmula: nombre, costo, precio_venta
+    // Paginado: 12 items por página (query param: ?page=1)
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = 12;
+    const offset = (page - 1) * perPage;
+
+    // Obtener total de fórmulas para metadatos
+    const totalRes = await sql`SELECT COUNT(*)::int AS c FROM formulas`;
+    const total = (totalRes && totalRes[0] && Number(totalRes[0].c)) || 0;
+
+    // Traer la página solicitada con componentes agregados en una sola consulta
+    const rows = await sql`
+      SELECT f.*, COALESCE(json_agg(json_build_object(
+        'id', fc.id,
+        'formula_id', fc.formula_id,
+        'materia_prima_id', fc.materia_prima_id,
+        'cantidad', fc.cantidad,
+        'unidad', fc.unidad
+      ) ) FILTER (WHERE fc.id IS NOT NULL), '[]') AS componentes
+      FROM formulas f
+      LEFT JOIN formula_componentes fc ON fc.formula_id = f.id
+      GROUP BY f.id
+      ORDER BY f.producto_terminado_id, f.nombre
+      LIMIT ${perPage} OFFSET ${offset}
+    `;
+
+    const formulas = rows.map((f) => {
+      f.componentes = f.componentes || [];
       f.tamano = {
         id: f.id,
         nombre: f.nombre,
@@ -38,9 +59,76 @@ router.get('/', async (req, res) => {
         costo: f.costo,
         precio_venta: f.precio_venta,
       };
-      // Mantener campos de fórmula principales
-    }
-    res.json(formulas);
+      return f;
+    });
+
+    res.json({
+      data: formulas,
+      meta: {
+        total,
+        page,
+        per_page: perPage,
+        total_pages: Math.ceil(total / perPage),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Buscar fórmulas por nombre
+// GET /api/formulas/search?q=<texto>&page=<n>
+router.get('/search', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim();
+    if (!q) return res.status(400).json({ error: 'q (texto de búsqueda) requerido' });
+
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = 12;
+    const offset = (page - 1) * perPage;
+
+    // total matching
+    const totalRes = await sql`SELECT COUNT(*)::int AS c FROM formulas WHERE nombre ILIKE ${'%' + q + '%'} `;
+    const total = (totalRes && totalRes[0] && Number(totalRes[0].c)) || 0;
+
+    const rows = await sql`
+      SELECT f.*, COALESCE(json_agg(json_build_object(
+        'id', fc.id,
+        'formula_id', fc.formula_id,
+        'materia_prima_id', fc.materia_prima_id,
+        'cantidad', fc.cantidad,
+        'unidad', fc.unidad
+      ) ) FILTER (WHERE fc.id IS NOT NULL), '[]') AS componentes
+      FROM formulas f
+      LEFT JOIN formula_componentes fc ON fc.formula_id = f.id
+      WHERE f.nombre ILIKE ${'%' + q + '%'}
+      GROUP BY f.id
+      ORDER BY f.producto_terminado_id, f.nombre
+      LIMIT ${perPage} OFFSET ${offset}
+    `;
+
+    const formulas = rows.map((f) => {
+      f.componentes = f.componentes || [];
+      f.tamano = {
+        id: f.id,
+        nombre: f.nombre,
+        cantidad: f.cantidad || null,
+        unidad: f.unidad || null,
+        costo: f.costo,
+        precio_venta: f.precio_venta,
+      };
+      return f;
+    });
+
+    res.json({
+      data: formulas,
+      meta: {
+        total,
+        page,
+        per_page: perPage,
+        total_pages: Math.ceil(total / perPage),
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -163,19 +251,31 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const formula = await sql`SELECT f.* FROM formulas f WHERE f.id = ${req.params.id}`;
-    if (formula.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    formula[0].componentes =
-      await sql`SELECT * FROM formula_componentes WHERE formula_id = ${req.params.id}`;
-    formula[0].tamano = {
-      id: formula[0].id,
-      nombre: formula[0].nombre,
-      cantidad: formula[0].cantidad || null,
-      unidad: formula[0].unidad || null,
-      costo: formula[0].costo,
-      precio_venta: formula[0].precio_venta,
+    const rows = await sql`
+      SELECT f.*, COALESCE(json_agg(json_build_object(
+        'id', fc.id,
+        'formula_id', fc.formula_id,
+        'materia_prima_id', fc.materia_prima_id,
+        'cantidad', fc.cantidad,
+        'unidad', fc.unidad
+      ) ) FILTER (WHERE fc.id IS NOT NULL), '[]') AS componentes
+      FROM formulas f
+      LEFT JOIN formula_componentes fc ON fc.formula_id = f.id
+      WHERE f.id = ${req.params.id}
+      GROUP BY f.id
+    `;
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
+    const formula = rows[0];
+    formula.componentes = formula.componentes || [];
+    formula.tamano = {
+      id: formula.id,
+      nombre: formula.nombre,
+      cantidad: formula.cantidad || null,
+      unidad: formula.unidad || null,
+      costo: formula.costo,
+      precio_venta: formula.precio_venta,
     };
-    res.json(formula[0]);
+    res.json(formula);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
