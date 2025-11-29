@@ -22,7 +22,7 @@ function validarFormula(body) {
   return null;
 }
 
-/*router.get('/', async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     // La tabla `tamanos` puede no existir en este esquema; las "versiones/tamaños" se representan ahora como filas en `formulas`.
     const formulas =
@@ -45,45 +45,7 @@ function validarFormula(body) {
     res.status(500).json({ error: err.message });
   }
 });
-*/
-router.get('/', async (req, res) => {
-  try {
-    // La tabla `tamanos` puede no existir en este esquema; las "versiones/tamaños" se representan ahora como filas en `formulas`.
-    // Evitar consultas N+1: obtener todas las fórmulas y agregar sus componentes
-    // en una sola consulta usando json_agg. Esto reduce roundtrips a la DB.
-    const formulas = await sql`
-      SELECT f.*, COALESCE(json_agg(fc) FILTER (WHERE fc.id IS NOT NULL), '[]') AS componentes
-      FROM formulas f
-      LEFT JOIN formula_componentes fc ON fc.formula_id = f.id
-      GROUP BY f.id
-      ORDER BY f.producto_terminado_id, f.nombre
-    `;
 
-    for (const f of formulas) {
-      // Dependiendo del driver, la columna `componentes` puede venir como string JSON;
-      // normalizar a array de objetos JS.
-      if (typeof f.componentes === 'string') {
-        try {
-          f.componentes = JSON.parse(f.componentes);
-        } catch (e) {
-          f.componentes = [];
-        }
-      }
-      // Las propiedades de tamaño ahora están en la propia fórmula: nombre, costo, precio_venta
-      f.tamano = {
-        id: f.id,
-        nombre: f.nombre,
-        cantidad: f.cantidad || null,
-        unidad: f.unidad || null,
-        costo: f.costo,
-        precio_venta: f.precio_venta,
-      };
-    }
-    res.json(formulas);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 
 router.post('/', async (req, res) => {
