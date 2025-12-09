@@ -147,25 +147,25 @@ router.get('/', async (req, res) => {
     // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó en este entorno
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) {}
+    } catch (e) { }
     const pedidos = await sql`SELECT * FROM pedidos_venta`;
     const pedidosConDetalle = [];
     for (const p of pedidos) {
@@ -188,38 +188,38 @@ router.get('/', async (req, res) => {
            ) op ON op.producto_terminado_id = prod.id
            WHERE pv.pedido_venta_id = ${p.id}
         `;
-        // Normalizar tipos y calcular subtotales
-        let total = 0;
-        const productosMapeados = productos.map((item) => {
-          const cantidad = Number(item.cantidad);
-          const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
-          const costo = item.costo != null ? parseFloat(item.costo) : null;
-          const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
-          total += subtotal;
-          return {
-            id: item.id,
-            pedido_venta_id: item.pedido_venta_id,
-            producto_id: item.producto_id,
-            formula_id: item.formula_id || null,
-            formula_nombre: item.formula_nombre || null,
-            orden_produccion_id: item.orden_produccion_id || null,
-            produccion_creada: !!item.produccion_creada,
-            cantidad,
-            producto_nombre: item.producto_nombre,
-            produccion_completada: !!item.produccion_completada,
-            precio_venta: isNaN(precio) ? null : precio,
-            costo: costo,
-            image_url: item.image_url,
-            subtotal,
-          };
-        });
+      // Normalizar tipos y calcular subtotales
+      let total = 0;
+      const productosMapeados = productos.map((item) => {
+        const cantidad = Number(item.cantidad);
+        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+        const costo = item.costo != null ? parseFloat(item.costo) : null;
+        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+        total += subtotal;
+        return {
+          id: item.id,
+          pedido_venta_id: item.pedido_venta_id,
+          producto_id: item.producto_id,
+          formula_id: item.formula_id || null,
+          formula_nombre: item.formula_nombre || null,
+          orden_produccion_id: item.orden_produccion_id || null,
+          produccion_creada: !!item.produccion_creada,
+          cantidad,
+          producto_nombre: item.producto_nombre,
+          produccion_completada: !!item.produccion_completada,
+          precio_venta: isNaN(precio) ? null : precio,
+          costo: costo,
+          image_url: item.image_url,
+          subtotal,
+        };
+      });
 
-        // No incluir componentes en la respuesta: el front usará `formula_id` para crear la orden de producción
-        pedidosConDetalle.push({
-          ...p,
-          productos: productosMapeados,
-          total,
-        });
+      // No incluir componentes en la respuesta: el front usará `formula_id` para crear la orden de producción
+      pedidosConDetalle.push({
+        ...p,
+        productos: productosMapeados,
+        total,
+      });
     }
     res.json(pedidosConDetalle);
   } catch (err) {
@@ -237,19 +237,19 @@ router.post('/', async (req, res) => {
     // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
-    } catch (e) {}
+    } catch (e) { }
 
     await sql`BEGIN`;
     try {
@@ -341,9 +341,83 @@ router.post('/', async (req, res) => {
     } catch (errTx) {
       try {
         await sql`ROLLBACK`;
-      } catch (e) {}
+      } catch (e) { }
       throw errTx;
     }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/paginated', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const countResult = await sql`SELECT COUNT(*) FROM pedidos_venta`;
+    const total = parseInt(countResult[0].count);
+
+    const pedidos = await sql`SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}`;
+    const pedidosConDetalle = [];
+    for (const p of pedidos) {
+      const productos = await sql`
+          SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+            COALESCE(pv.costo_unitario, prod.costo) AS costo,
+            pv.orden_produccion_id,
+            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+            prod.image_url,
+            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+           FROM pedido_venta_productos pv
+           LEFT JOIN productos prod ON prod.id = pv.producto_id
+           LEFT JOIN formulas f ON f.id = pv.formula_id
+           LEFT JOIN (
+             SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+             FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+           ) op ON op.producto_terminado_id = prod.id
+           WHERE pv.pedido_venta_id = ${p.id}
+        `;
+      let totalPedido = 0;
+      const productosMapeados = productos.map((item) => {
+        const cantidad = Number(item.cantidad);
+        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+        const costo = item.costo != null ? parseFloat(item.costo) : null;
+        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+        totalPedido += subtotal;
+        return {
+          id: item.id,
+          pedido_venta_id: item.pedido_venta_id,
+          producto_id: item.producto_id,
+          formula_id: item.formula_id || null,
+          formula_nombre: item.formula_nombre || null,
+          orden_produccion_id: item.orden_produccion_id || null,
+          produccion_creada: !!item.produccion_creada,
+          cantidad,
+          producto_nombre: item.producto_nombre,
+          produccion_completada: !!item.produccion_completada,
+          precio_venta: isNaN(precio) ? null : precio,
+          costo: costo,
+          image_url: item.image_url,
+          subtotal,
+        };
+      });
+
+      pedidosConDetalle.push({
+        ...p,
+        productos: productosMapeados,
+        total: totalPedido,
+      });
+    }
+    res.json({
+      data: pedidosConDetalle,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -354,10 +428,10 @@ router.get('/:id', async (req, res) => {
     // Asegurar columnas de orden/flag por si la migración no se ejecutó en este entorno
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) {}
+    } catch (e) { }
     const pedido = await sql`SELECT * FROM pedidos_venta WHERE id = ${req.params.id}`;
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const productos = await sql`
@@ -490,9 +564,8 @@ async function completarPedidoTransaccional(pedidoId) {
         e.code = 'INVENTORY_CONFLICT';
         throw e;
       }
-      await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
-        linea.producto_id
-      }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+      await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id
+        }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
       movimientos.push({
         producto_id: linea.producto_id,
         almacen_id: inv.almacen_id,
@@ -529,9 +602,8 @@ async function completarPedidoTransaccional(pedidoId) {
           e.code = 'INVENTORY_CONFLICT';
           throw e;
         }
-        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
-          linea.producto_id
-        }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id
+          }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
         movimientos.push({
           producto_id: linea.producto_id,
           almacen_id: inv.almacen_id,
@@ -568,7 +640,7 @@ async function completarPedidoTransaccional(pedidoId) {
           tasa NUMERIC,
           tasa_simbolo VARCHAR(10)
         );`;
-      } catch (e) {}
+      } catch (e) { }
 
       // Determinar tasa a aplicar según la moneda del banco (si se provee banco_id)
       let tasaVal = null;
@@ -588,7 +660,7 @@ async function completarPedidoTransaccional(pedidoId) {
                 tasaSimbolo = moneda; // usar el símbolo del banco
               }
             }
-          } catch (e) {}
+          } catch (e) { }
         }
         // Si no se obtuvo tasa desde la moneda del banco, intentar detalles por combinación banco+forma
         if (tasaVal == null && pagoObj.banco_id != null && pagoObj.forma_pago_id != null) {
@@ -617,17 +689,15 @@ async function completarPedidoTransaccional(pedidoId) {
             tasaVal = anyT[0].monto;
             tasaSimbolo = anyT[0].simbolo;
           }
-        } catch (e) {}
+        } catch (e) { }
       }
 
       // Insertar registro de pago incluyendo tasa y símbolo
       const inserted = await sql`
         INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
-        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${
-        pagoObj.monto
-      }, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${
-        tasaVal || null
-      }, ${tasaSimbolo || null}) RETURNING *
+        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto
+        }, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${tasaVal || null
+        }, ${tasaSimbolo || null}) RETURNING *
       `;
       pagoInserted = inserted && inserted[0] ? inserted[0] : null;
     } catch (e) {
@@ -718,7 +788,7 @@ router.post('/:id/pagos', async (req, res) => {
           tasa NUMERIC,
           tasa_simbolo VARCHAR(10)
         );`;
-      } catch (e) {}
+      } catch (e) { }
 
       // Determinar tasa según moneda del banco
       let tasaVal = null;
@@ -738,7 +808,7 @@ router.post('/:id/pagos', async (req, res) => {
                 tasaSimbolo = moneda;
               }
             }
-          } catch (e) {}
+          } catch (e) { }
           // Fallback: si no se obtuvo tasa desde moneda del banco, verificar detalles por banco+forma
           if (tasaVal == null) {
             try {
@@ -750,7 +820,7 @@ router.post('/:id/pagos', async (req, res) => {
                 if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo;
                 else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
               }
-            } catch (e) {}
+            } catch (e) { }
           }
         }
       } catch (e) {
@@ -764,23 +834,21 @@ router.post('/:id/pagos', async (req, res) => {
             tasaVal = anyT[0].monto;
             tasaSimbolo = anyT[0].simbolo;
           }
-        } catch (e) {}
+        } catch (e) { }
       }
 
       const inserted = await sql`
         INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
-        VALUES (${pedidoId}, ${pago.forma_pago_id}, ${pago.banco_id || null}, ${pago.monto}, ${
-        pago.referencia || null
-      }, ${pago.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${
-        tasaSimbolo || null
-      }) RETURNING *
+        VALUES (${pedidoId}, ${pago.forma_pago_id}, ${pago.banco_id || null}, ${pago.monto}, ${pago.referencia || null
+        }, ${pago.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null
+        }) RETURNING *
       `;
       await sql`COMMIT`;
       return res.status(201).json({ ok: true, pago: inserted && inserted[0] ? inserted[0] : null });
     } catch (errTx) {
       try {
         await sql`ROLLBACK`;
-      } catch (e) {}
+      } catch (e) { }
       throw errTx;
     }
   } catch (err) {
@@ -824,13 +892,13 @@ router.post('/:id/items', async (req, res) => {
     }
 
     // asegurar columnas defensivas
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`; } catch (e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`; } catch (e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`; } catch (e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`; } catch (e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`; } catch (e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`; } catch (e) {}
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`; } catch (e) {}
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`; } catch (e) { }
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`; } catch (e) { }
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`; } catch (e) { }
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`; } catch (e) { }
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`; } catch (e) { }
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`; } catch (e) { }
+    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`; } catch (e) { }
 
     for (const p of productos) {
       // Comportamiento consistente con endpoint público: guardar snapshot preferiendo datos de la fórmula cuando exista.
@@ -916,7 +984,7 @@ router.post('/:id/items', async (req, res) => {
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
     return res.status(201).json(pedidoObj);
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error agregando items al pedido:', err);
     return res.status(500).json({ error: err.message });
   }
@@ -952,11 +1020,11 @@ router.get('/:id/pagos', async (req, res) => {
         tasa_simbolo: r.tasa_simbolo,
         banco: r.banco_id
           ? {
-              id: r.banco_id,
-              nombre: r.banco_nombre,
-              moneda: r.banco_moneda,
-              detalles: r.banco_detalles,
-            }
+            id: r.banco_id,
+            nombre: r.banco_nombre,
+            moneda: r.banco_moneda,
+            detalles: r.banco_detalles,
+          }
           : null,
         forma_pago: r.forma_pago_id
           ? { id: r.forma_pago_id, nombre: r.forma_nombre, detalles: r.forma_detalles }
@@ -1098,9 +1166,8 @@ router.post('/:id/cancelar', async (req, res) => {
         const take = Math.min(committed, qtyToRelease);
         await sql`UPDATE inventario SET stock_comprometido = stock_comprometido - ${take} WHERE id = ${inv.id}`;
         // Registrar movimiento de inventario para auditoría (tipo 'entrada' indica liberación/retorno a disponible)
-        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
-          linea.producto_id
-        }, ${inv.almacen_id}, 'entrada', ${take}, ${'Liberación reserva pedido ' + pedidoId})`;
+        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id
+          }, ${inv.almacen_id}, 'entrada', ${take}, ${'Liberación reserva pedido ' + pedidoId})`;
         liberaciones.push({
           producto_id: linea.producto_id,
           almacen_id: inv.almacen_id,
@@ -1205,7 +1272,7 @@ router.post('/:id/cancelar', async (req, res) => {
         } else {
           try {
             await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${orden.producto_terminado_id}, ${almacenId}, ${producedQty}, 0)`;
-          } catch (e) {}
+          } catch (e) { }
         }
         await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${orden.producto_terminado_id}, ${almacenId}, 'entrada', ${producedQty}, ${'Cancelación pedido ' + pedidoId + ' - devolución producción orden ' + oid})`;
       }
@@ -1228,7 +1295,7 @@ router.post('/:id/cancelar', async (req, res) => {
           } else {
             try {
               await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${compId}, ${compAlmId}, ${totalToReturn}, 0)`;
-            } catch (e) {}
+            } catch (e) { }
           }
           await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${compId}, ${compAlmId}, 'entrada', ${totalToReturn}, ${'Cancelación pedido ' + pedidoId + ' - devolución componentes orden ' + oid})`;
         }
@@ -1277,7 +1344,7 @@ router.post('/:id/cancelar', async (req, res) => {
   } catch (err) {
     try {
       await sql`ROLLBACK`;
-    } catch (e) {}
+    } catch (e) { }
     console.error('Error cancelando pedido:', err);
     return res.status(500).json({ error: 'Error cancelando pedido', detail: err.message });
   }
@@ -1331,10 +1398,10 @@ router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) =>
     // Asegurar columnas antes de actualizar la línea (defensivo)
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) {}
+    } catch (e) { }
 
     // Actualizar la línea del pedido para vincular la orden y marcar produccion_creada
     await sql`
@@ -1346,7 +1413,7 @@ router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) =>
   } catch (err) {
     try {
       await sql`ROLLBACK`;
-    } catch (e) {}
+    } catch (e) { }
     console.error('Error creando orden desde pedido:', err && err.message ? err.message : err);
     return res.status(500).json({ error: err.message });
   }
@@ -1424,7 +1491,7 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
     return res.json(pedidoObj);
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) {}
+    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error eliminando línea del pedido:', err);
     return res.status(500).json({ error: 'Error eliminando línea' });
   }
