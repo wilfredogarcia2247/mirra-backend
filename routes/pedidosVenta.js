@@ -349,6 +349,38 @@ router.post('/', async (req, res) => {
   }
 });
 
+router.get('/stats', async (req, res) => {
+  try {
+    const stats = await sql`
+      SELECT estado, COUNT(*)::int as count 
+      FROM pedidos_venta 
+      GROUP BY estado
+    `;
+
+    // Formatear la respuesta para que sea fácil de consumir
+    const result = {
+      Pendiente: 0,
+      Enviado: 0,
+      Completado: 0,
+      Cancelado: 0,
+      Total: 0
+    };
+
+    let total = 0;
+    stats.forEach(s => {
+      if (result.hasOwnProperty(s.estado)) {
+        result[s.estado] = s.count;
+      }
+      total += s.count;
+    });
+    result.Total = total;
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/paginated', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
