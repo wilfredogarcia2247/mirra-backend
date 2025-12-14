@@ -381,6 +381,119 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// Buscar pedidos por ID o nombre del cliente
+// GET /api/pedidos-venta/buscar?q=termino
+router.get('/buscar', async (req, res) => {
+  try {
+    const searchTerm = req.query.q;
+    if (!searchTerm || searchTerm.trim() === '') {
+      return res.status(400).json({ error: 'Término de búsqueda requerido' });
+    }
+
+    // Verificar si es una búsqueda por ID (numérico)
+    const isNumericSearch = !isNaN(searchTerm) && !isNaN(parseFloat(searchTerm));
+    
+    let pedidos;
+    if (isNumericSearch) {
+      // Búsqueda por ID de pedido (búsqueda exacta)
+      pedidos = await sql`
+        SELECT * FROM pedidos_venta 
+        WHERE id = ${parseInt(searchTerm)}
+        ORDER BY fecha DESC
+        LIMIT 20
+      `;
+    } else {
+      // Búsqueda por nombre (búsqueda parcial case-insensitive)
+      const searchPattern = `%${searchTerm}%`;
+      pedidos = await sql`
+        SELECT * FROM pedidos_venta
+        WHERE nombre_cliente ILIKE ${searchPattern}
+        ORDER BY 
+          CASE 
+            WHEN nombre_cliente ILIKE ${searchPattern} THEN 1
+            ELSE 2
+          END,
+          fecha DESC
+        LIMIT 20
+      `;
+    }
+
+    // Enriquecer los pedidos con los detalles de productos
+    const pedidosConDetalle = [];
+    for (const p of pedidos) {
+      const productos = await sql`
+        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+          COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+          COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+          COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+          COALESCE(pv.costo_unitario, prod.costo) AS costo,
+          pv.orden_produccion_id,
+          COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+          prod.image_url,
+          (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+        FROM pedido_venta_productos pv
+        LEFT JOIN productos prod ON prod.id = pv.producto_id
+        LEFT JOIN formulas f ON f.id = pv.formula_id
+        LEFT JOIN (
+          SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+          FROM ordenes_produccion 
+          WHERE estado = 'Completada' 
+          GROUP BY producto_terminado_id
+        ) op ON op.producto_terminado_id = prod.id
+        WHERE pv.pedido_venta_id = ${p.id}
+      `;
+
+      // Calcular total del pedido
+      let total = 0;
+      const productosMapeados = productos.map((item) => {
+        const cantidad = Number(item.cantidad);
+        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
+        const costo = item.costo != null ? parseFloat(item.costo) : null;
+        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+        total += subtotal;
+        
+        return {
+          id: item.id,
+          pedido_venta_id: item.pedido_venta_id,
+          producto_id: item.producto_id,
+          formula_id: item.formula_id || null,
+          formula_nombre: item.formula_nombre || null,
+          orden_produccion_id: item.orden_produccion_id || null,
+          produccion_creada: !!item.produccion_creada,
+          cantidad,
+          producto_nombre: item.producto_nombre,
+          produccion_completada: !!item.produccion_completada,
+          precio_venta: isNaN(precio) ? null : precio,
+          costo: costo,
+          image_url: item.image_url,
+          subtotal
+        };
+      });
+
+      pedidosConDetalle.push({
+        ...p,
+        productos: productosMapeados,
+        total
+      });
+    }
+
+    // Si solo hay un resultado y es búsqueda por ID, devolver directamente el objeto
+    if (isNumericSearch && pedidosConDetalle.length === 1) {
+      return res.json(pedidosConDetalle[0]);
+    }
+    
+    res.json(pedidosConDetalle);
+  } catch (err) {
+    console.error('Error en búsqueda de pedidos:', err);
+    res.status(500).json({ 
+      error: 'Error al buscar pedidos', 
+      details: err.message
+    });
+  }
+});
+
+
+
 router.get('/paginated', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
