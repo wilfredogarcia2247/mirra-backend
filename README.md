@@ -1,4 +1,4 @@
-# Aromas - Sistema de Gestión de Perfumería
+# Aromas - Sistema de Gestión de Perfumería.
 
 ## Descripción
 
