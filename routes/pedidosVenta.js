@@ -392,7 +392,7 @@ router.get('/buscar', async (req, res) => {
 
     // Verificar si es una búsqueda por ID (numérico)
     const isNumericSearch = !isNaN(searchTerm) && !isNaN(parseFloat(searchTerm));
-    
+
     let pedidos;
     if (isNumericSearch) {
       // Búsqueda por ID de pedido (búsqueda exacta)
@@ -451,7 +451,7 @@ router.get('/buscar', async (req, res) => {
         const costo = item.costo != null ? parseFloat(item.costo) : null;
         const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
         total += subtotal;
-        
+
         return {
           id: item.id,
           pedido_venta_id: item.pedido_venta_id,
@@ -481,12 +481,12 @@ router.get('/buscar', async (req, res) => {
     if (isNumericSearch && pedidosConDetalle.length === 1) {
       return res.json(pedidosConDetalle[0]);
     }
-    
+
     res.json(pedidosConDetalle);
   } catch (err) {
     console.error('Error en búsqueda de pedidos:', err);
-    res.status(500).json({ 
-      error: 'Error al buscar pedidos', 
+    res.status(500).json({
+      error: 'Error al buscar pedidos',
       details: err.message
     });
   }
