@@ -23,26 +23,87 @@ router.get('/', async (req, res) => {
 
 // GET /api/ordenes-produccion/detailed
 // Devuelve órdenes de producción con nombre del producto terminado y los componentes que usa
+// Soporta filtro opcional: ?pedido_id=X
 router.get('/detailed', async (req, res) => {
   try {
-    const ordenes = await sql`SELECT o.*, p.nombre as producto_nombre FROM ordenes_produccion o LEFT JOIN productos p ON p.id = o.producto_terminado_id ORDER BY o.id DESC`;
-    const detailed = [];
-    for (const ord of ordenes) {
-      const componentes = await sql`SELECT fc.*, prod.nombre as materia_nombre FROM formula_componentes fc LEFT JOIN productos prod ON prod.id = fc.materia_prima_id WHERE fc.formula_id = ${ord.formula_id}`;
-      // Calcular cantidad total requerida por la orden (componente.cantidad * orden.cantidad)
-      const componentes_mapped = (componentes || []).map(c => ({
-        materia_prima_id: c.materia_prima_id,
-        materia_nombre: c.materia_nombre || c.nombre || null,
-        cantidad_por_unidad: Number(c.cantidad),
-        unidad: c.unidad || null,
-        cantidad_total: Number(c.cantidad) * Number(ord.cantidad || 0)
-      }));
-      detailed.push({
-        orden: ord,
-        producto_nombre: ord.producto_nombre || null,
-        componentes: componentes_mapped
-      });
+    const { pedido_id } = req.query;
+
+    // Construir consulta optimizada con JSON aggregation para evitar N+1
+    let query;
+    if (pedido_id != null && !isNaN(Number(pedido_id))) {
+      // Filtrar por pedido_venta_id si se proporciona
+      query = sql`
+        SELECT 
+          o.id, o.producto_terminado_id, o.cantidad, o.formula_id, o.estado, o.fecha, o.pedido_venta_id,
+          p.nombre as producto_nombre,
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'materia_prima_id', fc.materia_prima_id,
+                'materia_nombre', COALESCE(prod.nombre, ing.nombre),
+                'cantidad_por_unidad', fc.cantidad,
+                'unidad', fc.unidad,
+                'cantidad_total', fc.cantidad * o.cantidad
+              )
+              ORDER BY fc.id
+            ) FILTER (WHERE fc.id IS NOT NULL),
+            '[]'::jsonb
+          ) as componentes
+        FROM ordenes_produccion o
+        LEFT JOIN productos p ON p.id = o.producto_terminado_id
+        LEFT JOIN formula_componentes fc ON fc.formula_id = o.formula_id
+        LEFT JOIN productos prod ON prod.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        WHERE o.pedido_venta_id = ${Number(pedido_id)}
+        GROUP BY o.id, p.nombre
+        ORDER BY o.id DESC
+      `;
+    } else {
+      // Sin filtro: devolver todas las órdenes
+      query = sql`
+        SELECT 
+          o.id, o.producto_terminado_id, o.cantidad, o.formula_id, o.estado, o.fecha, o.pedido_venta_id,
+          p.nombre as producto_nombre,
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'materia_prima_id', fc.materia_prima_id,
+                'materia_nombre', COALESCE(prod.nombre, ing.nombre),
+                'cantidad_por_unidad', fc.cantidad,
+                'unidad', fc.unidad,
+                'cantidad_total', fc.cantidad * o.cantidad
+              )
+              ORDER BY fc.id
+            ) FILTER (WHERE fc.id IS NOT NULL),
+            '[]'::jsonb
+          ) as componentes
+        FROM ordenes_produccion o
+        LEFT JOIN productos p ON p.id = o.producto_terminado_id
+        LEFT JOIN formula_componentes fc ON fc.formula_id = o.formula_id
+        LEFT JOIN productos prod ON prod.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        GROUP BY o.id, p.nombre
+        ORDER BY o.id DESC
+      `;
     }
+
+    const ordenes = await query;
+
+    // Mapear resultado con componentes ya agregados
+    const detailed = ordenes.map(ord => ({
+      orden: {
+        id: ord.id,
+        producto_terminado_id: ord.producto_terminado_id,
+        cantidad: ord.cantidad,
+        formula_id: ord.formula_id,
+        estado: ord.estado,
+        fecha: ord.fecha,
+        pedido_venta_id: ord.pedido_venta_id
+      },
+      producto_nombre: ord.producto_nombre || null,
+      componentes: ord.componentes
+    }));
+
     res.json(detailed);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -53,10 +114,10 @@ router.post('/', async (req, res) => {
   const error = validarOrden(req.body);
   if (error) return res.status(400).json({ error });
   try {
-    const { producto_terminado_id, cantidad, formula_id, estado } = req.body;
+    const { producto_terminado_id, cantidad, formula_id, estado, pedido_venta_id } = req.body;
     const result = await sql`
-      INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
-      VALUES (${producto_terminado_id}, ${cantidad}, ${formula_id}, ${estado}, NOW()) RETURNING *
+      INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha, pedido_venta_id)
+      VALUES (${producto_terminado_id}, ${cantidad}, ${formula_id}, ${estado}, NOW(), ${pedido_venta_id || null}) RETURNING *
     `;
     res.status(201).json(result[0]);
   } catch (err) {
@@ -114,6 +175,7 @@ router.post('/:id/completar', async (req, res) => {
     // Verificar disponibilidad y consumir materia prima desde almacenes marcados como materia prima
     for (const comp of componentes) {
       let required = Number(comp.cantidad) * qty;
+
       const mpInventarios = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
@@ -121,40 +183,51 @@ router.post('/:id/completar', async (req, res) => {
         ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         FOR UPDATE
       `;
+
       let totalAvailable = 0;
       for (const inv of mpInventarios)
         totalAvailable += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+
       if (totalAvailable < required) {
         await sql`ROLLBACK`;
         return res
           .status(400)
           .json({ error: `Materia prima ${comp.materia_prima_id} insuficiente` });
       }
+
+      // Consumir inventario (queries individuales pero dentro de transacción = rápido)
       for (const inv of mpInventarios) {
         if (required <= 0) break;
         const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
         if (available <= 0) continue;
         const take = Math.min(available, required);
+
         const consumed = await sql`
           UPDATE inventario
-          SET stock_fisico = stock_fisico - ${take}, stock_comprometido = GREATEST(0, stock_comprometido - ${take})
+          SET stock_fisico = stock_fisico - ${take}, 
+              stock_comprometido = GREATEST(0, stock_comprometido - ${take})
           WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0
           RETURNING id, stock_fisico, stock_comprometido
         `;
+
         if (!consumed || consumed.length === 0) {
           await sql`ROLLBACK`;
           return res.status(400).json({
             error: `Inventario insuficiente al consumir materia prima id ${comp.materia_prima_id}`,
           });
         }
-        await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${
-          comp.materia_prima_id
-        }, ${inv.almacen_id}, 'salida', ${take}, ${'Producción orden ' + ordenId})`;
+
+        await sql`
+          INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) 
+          VALUES (${comp.materia_prima_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Producción orden ' + ordenId})
+        `;
+
         movimientos.push({
           materia_prima_id: comp.materia_prima_id,
           almacen_id: inv.almacen_id,
           cantidad: take,
         });
+
         required -= take;
       }
     }
@@ -173,9 +246,8 @@ router.post('/:id/completar', async (req, res) => {
         await sql`INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) VALUES (${prodId}, ${almacen_venta_id}, ${qty}, 0) RETURNING id, producto_id, almacen_id, stock_fisico, stock_comprometido`;
       destinoInv = created[0];
     }
-    await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${prodId}, ${almacen_venta_id}, 'entrada', ${qty}, ${
-      'Producción orden ' + ordenId
-    })`;
+    await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${prodId}, ${almacen_venta_id}, 'entrada', ${qty}, ${'Producción orden ' + ordenId
+      })`;
 
     await sql`UPDATE ordenes_produccion SET estado = 'Completada' WHERE id = ${ordenId}`;
 
@@ -192,7 +264,7 @@ router.post('/:id/completar', async (req, res) => {
   } catch (err) {
     try {
       await sql`ROLLBACK`;
-    } catch (e) {}
+    } catch (e) { }
     return res.status(500).json({ error: err.message });
   }
 });

@@ -1529,10 +1529,10 @@ router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) =>
       return res.status(400).json({ error: 'Cantidad inválida para la orden' });
     }
 
-    // Insertar orden
+    // Insertar orden con pedido_venta_id para permitir filtrado eficiente
     const ordenInserted = await sql`
-      INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha)
-      VALUES (${linea.producto_id}, ${cantidad}, ${linea.formula_id}, ${'Pendiente'}, NOW()) RETURNING *
+      INSERT INTO ordenes_produccion (producto_terminado_id, cantidad, formula_id, estado, fecha, pedido_venta_id)
+      VALUES (${linea.producto_id}, ${cantidad}, ${linea.formula_id}, ${'Pendiente'}, NOW(), ${pedidoId}) RETURNING *
     `;
     const orden = ordenInserted && ordenInserted[0] ? ordenInserted[0] : null;
     if (!orden) {
@@ -1639,6 +1639,214 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error eliminando línea del pedido:', err);
     return res.status(500).json({ error: 'Error eliminando línea' });
+  }
+});
+
+// POST /api/pedidos-venta/:id/completar-todo-atomico
+// Endpoint atómico que completa TODAS las órdenes de producción pendientes de un pedido
+// y luego finaliza el pedido (con pago opcional) en una sola transacción
+// Body: { almacen_venta_id: number, pago?: {...} }
+router.post('/:id/completar-todo-atomico', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+
+  const { almacen_venta_id, pago } = req.body || {};
+  if (!almacen_venta_id || isNaN(Number(almacen_venta_id))) {
+    return res.status(400).json({ error: 'almacen_venta_id requerido' });
+  }
+
+  const pagoError = validarPagoObj(pago);
+  if (pagoError) return res.status(400).json({ error: pagoError });
+
+  try {
+    await sql`BEGIN`;
+
+    // 1. Verificar que el pedido existe y bloquearlo
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+
+    const pedido = pedidoRows[0];
+    if (pedido.estado === 'Completado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Pedido ya está completado' });
+    }
+
+    // 2. Obtener todas las órdenes de producción pendientes para este pedido
+    const ordenesPendientes = await sql`
+      SELECT * FROM ordenes_produccion 
+      WHERE pedido_venta_id = ${pedidoId} AND estado = 'Pendiente'
+      ORDER BY id ASC
+      FOR UPDATE
+    `;
+
+    const ordenesCompletadas = [];
+    const errorMessages = [];
+
+    // 3. Completar cada orden de producción
+    for (const orden of ordenesPendientes) {
+      try {
+        // Verificar almacén destino
+        const dest = await sql`SELECT * FROM almacenes WHERE id = ${almacen_venta_id} FOR NO KEY UPDATE`;
+        if (!dest || dest.length === 0) {
+          throw new Error(`Almacén destino ${almacen_venta_id} no encontrado`);
+        }
+        if (dest[0].es_materia_prima === true) {
+          throw new Error('El almacén destino no puede ser marcado como materia prima');
+        }
+
+        // Obtener componentes de la fórmula
+        const componentes = await sql`SELECT * FROM formula_componentes WHERE formula_id = ${orden.formula_id}`;
+        if (!componentes || componentes.length === 0) {
+          throw new Error(`Fórmula ${orden.formula_id} sin componentes`);
+        }
+
+        const qty = Number(orden.cantidad);
+        const inventoryUpdates = [];
+
+        // Preparar movimientos de inventario
+        for (const comp of componentes) {
+          let required = Number(comp.cantidad) * qty;
+
+          const mpInventarios = await sql`
+            SELECT i.* FROM inventario i
+            JOIN almacenes a ON a.id = i.almacen_id
+            WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima = true
+            ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+            FOR UPDATE
+          `;
+
+          let totalAvailable = 0;
+          for (const inv of mpInventarios) {
+            totalAvailable += Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+          }
+
+          if (totalAvailable < required) {
+            throw new Error(`Materia prima ${comp.materia_prima_id} insuficiente (necesita ${required}, disponible ${totalAvailable})`);
+          }
+
+          for (const inv of mpInventarios) {
+            if (required <= 0) break;
+            const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido);
+            if (available <= 0) continue;
+            const take = Math.min(available, required);
+
+            inventoryUpdates.push({
+              inv_id: inv.id,
+              take: take,
+              materia_prima_id: comp.materia_prima_id,
+              almacen_id: inv.almacen_id
+            });
+
+            required -= take;
+          }
+        }
+
+        // Ejecutar updates de inventario (dentro de la transacción ya abierta)
+        // Aunque son queries individuales, al estar en una transacción son muy rápidas
+        // y no sufren overhead de red
+        if (inventoryUpdates.length > 0) {
+          for (const update of inventoryUpdates) {
+            const consumed = await sql`
+              UPDATE inventario
+              SET 
+                stock_fisico = stock_fisico - ${update.take},
+                stock_comprometido = GREATEST(0, stock_comprometido - ${update.take})
+              WHERE id = ${update.inv_id} AND stock_fisico - ${update.take} >= 0
+              RETURNING id
+            `;
+
+            if (!consumed || consumed.length === 0) {
+              throw new Error(`Inventario insuficiente para materia prima ${update.materia_prima_id} en orden ${orden.id}`);
+            }
+          }
+
+          // Insertar movimientos de inventario
+          for (const update of inventoryUpdates) {
+            await sql`
+              INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo)
+              VALUES (${update.materia_prima_id}, ${update.almacen_id}, 'salida', ${update.take}, ${'Producción orden ' + orden.id})
+            `;
+          }
+        }
+
+        // Incrementar inventario del producto terminado
+        const prodId = orden.producto_terminado_id;
+        const existing = await sql`
+          SELECT * FROM inventario 
+          WHERE producto_id = ${prodId} AND almacen_id = ${almacen_venta_id} 
+          FOR UPDATE
+        `;
+
+        if (existing && existing.length > 0) {
+          await sql`
+            UPDATE inventario 
+            SET stock_fisico = stock_fisico + ${qty} 
+            WHERE id = ${existing[0].id}
+          `;
+        } else {
+          await sql`
+            INSERT INTO inventario (producto_id, almacen_id, stock_fisico, stock_comprometido) 
+            VALUES (${prodId}, ${almacen_venta_id}, ${qty}, 0)
+          `;
+        }
+
+        await sql`
+          INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) 
+          VALUES (${prodId}, ${almacen_venta_id}, 'entrada', ${qty}, ${'Producción orden ' + orden.id})
+        `;
+
+        // Marcar orden como completada
+        await sql`UPDATE ordenes_produccion SET estado = 'Completada' WHERE id = ${orden.id}`;
+
+        ordenesCompletadas.push(orden.id);
+
+      } catch (ordenErr) {
+        errorMessages.push(`Orden ${orden.id}: ${ordenErr.message}`);
+        // No lanzar error aquí, continuar con la siguiente orden
+      }
+    }
+
+    // Si hubo errores en alguna orden, hacer rollback
+    if (errorMessages.length > 0) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({
+        error: 'Error completando órdenes de producción',
+        details: errorMessages
+      });
+    }
+
+    // 4. Completar el pedido usando la función transaccional existente
+    // Primero hacer COMMIT de las órdenes
+    await sql`COMMIT`;
+
+    // Luego completar el pedido (inicia su propia transacción)
+    try {
+      const result = await completarPedidoTransaccional(pedidoId, pago);
+      return res.json({
+        success: true,
+        pedido_id: pedidoId,
+        ordenes_completadas: ordenesCompletadas,
+        mensaje: `Pedido completado exitosamente. ${ordenesCompletadas.length} órdenes de producción completadas.`,
+        result
+      });
+    } catch (completarErr) {
+      // Si falla al completar el pedido, devolver error
+      return res.status(500).json({
+        error: 'Órdenes completadas pero error al finalizar pedido',
+        details: completarErr.message,
+        ordenes_completadas: ordenesCompletadas
+      });
+    }
+
+  } catch (err) {
+    try {
+      await sql`ROLLBACK`;
+    } catch (e) { }
+    console.error('Error en completar-todo-atomico:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
