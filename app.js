@@ -4,7 +4,14 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const app = express();
 app.use(express.json());
-app.use(cors()); // Permitir todos los orígenes
+const corsOptions = {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Habilitar pre-flight para todas las rutas
 
 // Human-friendly colorized console logger
 app.use((req, res, next) => {
@@ -19,7 +26,7 @@ app.use((req, res, next) => {
         const decoded = jwt.decode(token) || {};
         userId = decoded.id || decoded.userId || decoded.sub || '-';
       }
-    } catch (e) {}
+    } catch (e) { }
 
     const ip = (
       req.headers['x-forwarded-for'] ||
