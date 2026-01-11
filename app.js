@@ -107,6 +107,8 @@ app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 // Marcas
 app.use('/api/marcas', authMiddleware, require('./routes/marcas'));
+// Imágenes
+app.use('/api/images', require('./routes/imagenes'));
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.get('/', (req, res) => {
