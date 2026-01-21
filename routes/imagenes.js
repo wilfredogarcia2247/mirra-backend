@@ -73,11 +73,6 @@ const s3 = new S3Client({
     secretAccessKey: mustEnv('S3_SECRET_KEY'),
   },
   forcePathStyle: String(process.env.S3_FORCE_PATH_STYLE || 'true') === 'true',
-  requestHandler: {
-    httpsAgent: new https.Agent({
-      rejectUnauthorized: false
-    })
-  }
 });
 
 const BUCKET = mustEnv('S3_BUCKET');
@@ -153,6 +148,12 @@ router.post('/upload', upload.single('image'), async (req, res) => {
     });
   } catch (err) {
     console.error('Error subiendo imagen:', err);
+    
+    // Log de la respuesta cruda para depuración
+    if (err.$response) {
+      console.error('Respuesta cruda del servidor:', err.$response);
+    }
+    
     return res.status(500).json({
       ok: false,
       error: err.message || 'Error interno al subir imagen',

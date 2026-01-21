@@ -1,0 +1,49 @@
+# Dependencias
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Archivos de entorno (se configuran en Dokploy)
+.env
+.env.local
+.env.*.local
+
+# Git
+.git
+.gitignore
+
+# Documentación y tests
+docs
+tests
+*.md
+!README.md
+
+# Archivos de desarrollo
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Logs
+logs
+*.log
+server.log
+
+# Archivos temporales
+tmp
+temp
+.cache
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Scripts de desarrollo
+scripts
+archived_seeds
+
+# Archivos de configuración local
+.prettierrc
+.prettierignore
+render.yaml
