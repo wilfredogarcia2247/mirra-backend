@@ -127,10 +127,16 @@ router.post('/', async (req, res) => {
 
 // Completar una orden de producción: consumir materia prima y guardar producto terminado en almacén destino
 // POST /api/ordenes-produccion/:id/completar
-// Body: { almacen_venta_id }
+// Body: { almacen_venta_id, componentes_utilizados: [{ materia_prima_id, cantidad_total }] (opcional) }
 router.post('/:id/completar', async (req, res) => {
   const ordenId = Number(req.params.id);
-  const { almacen_venta_id } = req.body || {};
+  const { almacen_venta_id, componentes_utilizados } = req.body || {};
+
+  console.log('--- PETICIÓN DE DESCARGO (PRODUCCIÓN) ---');
+  console.log(`Orden ID: ${ordenId}`);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('-----------------------------------------');
+
   if (isNaN(ordenId)) return res.status(400).json({ error: 'ID inválido' });
   if (!almacen_venta_id || isNaN(Number(almacen_venta_id)))
     return res.status(400).json({ error: 'almacen_venta_id requerido e inválido' });
@@ -161,25 +167,53 @@ router.post('/:id/completar', async (req, res) => {
         .json({ error: 'El almacén destino no puede ser marcado como materia prima' });
     }
 
-    // Obtener componentes de la fórmula
-    const componentes =
-      await sql`SELECT * FROM formula_componentes WHERE formula_id = ${ord.formula_id}`;
-    if (!componentes || componentes.length === 0) {
-      await sql`ROLLBACK`;
-      return res.status(400).json({ error: 'Fórmula sin componentes' });
+    // Determinar qué componentes consumir
+    let itemsToConsume = [];
+    const qty = Number(ord.cantidad);
+
+    if (componentes_utilizados && Array.isArray(componentes_utilizados) && componentes_utilizados.length > 0) {
+      // Opción 1: El usuario envió cantidades manuales (Hubo cambios/errores en producción)
+      for (const c of componentes_utilizados) {
+        if (!c.materia_prima_id || isNaN(Number(c.materia_prima_id))) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: 'ID de materia prima inválido en componentes utilizados' });
+        }
+        const cant = Number(c.cantidad_total);
+        if (isNaN(cant) || cant < 0) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: 'Cantidad total inválida en componentes utilizados' });
+        }
+        itemsToConsume.push({
+          materia_prima_id: c.materia_prima_id,
+          cantidad_total: cant
+        });
+      }
+    } else {
+      // Opción 2: Producción perfecta, usar Fórmula estándar
+      const componentes =
+        await sql`SELECT * FROM formula_componentes WHERE formula_id = ${ord.formula_id}`;
+      // Si la fórmula no tiene componentes, no es un error critico, simplemente no se consume nada (puede ser un producto simple)
+      if (componentes && componentes.length > 0) {
+        itemsToConsume = componentes.map(comp => ({
+          materia_prima_id: comp.materia_prima_id,
+          cantidad_total: Number(comp.cantidad) * qty
+        }));
+      }
     }
 
-    const qty = Number(ord.cantidad);
     const movimientos = [];
 
     // Verificar disponibilidad y consumir materia prima desde almacenes marcados como materia prima
-    for (const comp of componentes) {
-      let required = Number(comp.cantidad) * qty;
+    for (const item of itemsToConsume) {
+      let required = item.cantidad_total;
+
+      // Si la cantidad es 0, no consumimos nada (ej. no se usó ese componente)
+      if (required <= 0) continue;
 
       const mpInventarios = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${comp.materia_prima_id} AND a.es_materia_prima = true
+        WHERE i.producto_id = ${item.materia_prima_id} AND a.es_materia_prima = true
         ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
         FOR UPDATE
       `;
@@ -192,7 +226,7 @@ router.post('/:id/completar', async (req, res) => {
         await sql`ROLLBACK`;
         return res
           .status(400)
-          .json({ error: `Materia prima ${comp.materia_prima_id} insuficiente` });
+          .json({ error: `Materia prima ${item.materia_prima_id} insuficiente. Requerido: ${required}, Disponible: ${totalAvailable}` });
       }
 
       // Consumir inventario (queries individuales pero dentro de transacción = rápido)
@@ -213,17 +247,17 @@ router.post('/:id/completar', async (req, res) => {
         if (!consumed || consumed.length === 0) {
           await sql`ROLLBACK`;
           return res.status(400).json({
-            error: `Inventario insuficiente al consumir materia prima id ${comp.materia_prima_id}`,
+            error: `Inventario insuficiente al consumir materia prima id ${item.materia_prima_id}`,
           });
         }
 
         await sql`
           INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) 
-          VALUES (${comp.materia_prima_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Producción orden ' + ordenId})
+          VALUES (${item.materia_prima_id}, ${inv.almacen_id}, 'salida', ${take}, ${'Producción orden ' + ordenId})
         `;
 
         movimientos.push({
-          materia_prima_id: comp.materia_prima_id,
+          materia_prima_id: item.materia_prima_id,
           almacen_id: inv.almacen_id,
           cantidad: take,
         });

@@ -42,6 +42,11 @@ router.post('/', async (req, res) => {
 // Body: { producto_id, almacen_id, cantidad }
 router.post('/ajustar', async (req, res) => {
   const body = req.body || {};
+
+  console.log('--- PETICIÓN DE AJUSTE DE INVENTARIO ---');
+  console.log('Body:', JSON.stringify(body, null, 2));
+  console.log('----------------------------------------');
+
   if (!body.producto_id || isNaN(Number(body.producto_id)))
     return res.status(400).json({ error: 'producto_id requerido' });
   if (!body.almacen_id || isNaN(Number(body.almacen_id)))
