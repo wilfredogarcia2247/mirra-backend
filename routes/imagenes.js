@@ -85,8 +85,16 @@ const SIGNED_EXPIRES = Number(process.env.SIGNED_URL_EXPIRES_SECONDS || 604800);
 async function ensureBucket() {
   try {
     await s3.send(new HeadBucketCommand({ Bucket: BUCKET }));
-  } catch {
-    await s3.send(new CreateBucketCommand({ Bucket: BUCKET }));
+  } catch (err) {
+    // Si el error es un 502 o algo que no es S3, mejor no intentar crear el bucket
+    if (err.$metadata && err.$metadata.httpStatusCode === 502) {
+      throw new Error('Servicio MinIO inaccesible (502 Bad Gateway). Revisa la infraestructura.');
+    }
+    try {
+      await s3.send(new CreateBucketCommand({ Bucket: BUCKET }));
+    } catch (createErr) {
+      console.error('Error asegurando el bucket:', createErr.message);
+    }
   }
 }
 
@@ -148,12 +156,12 @@ router.post('/upload', upload.single('image'), async (req, res) => {
     });
   } catch (err) {
     console.error('Error subiendo imagen:', err);
-    
+
     // Log de la respuesta cruda para depuración
     if (err.$response) {
       console.error('Respuesta cruda del servidor:', err.$response);
     }
-    
+
     return res.status(500).json({
       ok: false,
       error: err.message || 'Error interno al subir imagen',

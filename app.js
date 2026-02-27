@@ -6,7 +6,22 @@ const cors = require('cors');
 const app = express();
 app.use(express.json());
 const corsOptions = {
-  origin: true,
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'https://www.mirraperfumeria.com',
+      'https://mirraperfumeria.com',
+      'https://s3.mirraperfumeria.com',
+      'https://minio.mirraperfumeria.com',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ];
+    // Permitir si no hay origin (como apps móviles o curl) o si está en la lista
+    if (!origin || allowedOrigins.includes(origin) || origin.includes('mirraperfumeria.com')) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
