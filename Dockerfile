@@ -30,13 +30,6 @@ COPY --from=dependencies /app/node_modules ./node_modules
 # Copiar código de la aplicación
 COPY --from=build /app ./
 
-# Crear usuario no-root para seguridad
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
-    chown -R nodejs:nodejs /app
-
-USER nodejs
-
 # Exponer puerto
 EXPOSE 3000
 
