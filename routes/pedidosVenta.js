@@ -860,6 +860,12 @@ async function completarPedidoTransaccional(pedidoId) {
 // POST /api/pedidos-venta/:id/completar (usa helper transaccional)
 router.post('/:id/completar', async (req, res) => {
   const pedidoId = Number(req.params.id);
+
+  console.log('--- PETICIÓN DE DESCARGO (PEDIDO VENTA) ---');
+  console.log(`Pedido ID: ${pedidoId}`);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('-------------------------------------------');
+
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
   const pago = req.body && req.body.pago ? req.body.pago : null;
   const pagoError = validarPagoObj(pago);
@@ -883,6 +889,12 @@ router.post('/:id/completar', async (req, res) => {
 // POST /api/pedidos-venta/:id/finalizar -> endpoint explícito para completar y registrar pago
 router.post('/:id/finalizar', async (req, res) => {
   const pedidoId = Number(req.params.id);
+
+  console.log('--- PETICIÓN DE FINALIZAR Y DESCARGAR ---');
+  console.log(`Pedido ID: ${pedidoId}`);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('-----------------------------------------');
+
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
   const pago = req.body && req.body.pago ? req.body.pago : null;
   const pagoError = validarPagoObj(pago);
