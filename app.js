@@ -13,6 +13,7 @@ const corsOptions = {
       'https://s3.mirraperfumeria.com',
       'https://minio.mirraperfumeria.com',
       'http://localhost:5173',
+      'http://localhost:8080',
       'http://localhost:3000'
     ];
     // Permitir si no hay origin (como apps móviles o curl) o si está en la lista

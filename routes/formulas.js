@@ -134,7 +134,65 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// NUEVOS METODOS PARA ACTUALIZAR PRECIOS
 
+// GET /api/formulas/by-like?q=30ml
+router.get('/by-like', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim();
+    if (!q) return res.status(400).json({ error: 'q requerido' });
+
+    const rows = await sql`
+      SELECT f.*
+      FROM formulas f
+      WHERE f.nombre ILIKE ${'%' + q + '%'}
+      ORDER BY f.producto_terminado_id, f.nombre
+    `;
+
+    res.json({
+      data: rows,
+      meta: { total: rows.length, q },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/formulas/by-like
+// Body: { "q": "ml", "precio_venta": 25.00 }
+router.patch('/by-like', async (req, res) => {
+  const q = (req.body?.q || '').toString().trim();
+  const precioVenta = req.body?.precio_venta;
+
+  if (!q) return res.status(400).json({ error: 'q requerido' });
+  if (precioVenta == null || isNaN(Number(precioVenta))) {
+    return res.status(400).json({ error: 'precio_venta requerido y debe ser numérico' });
+  }
+
+  try {
+    await sql`BEGIN`;
+
+    const updated = await sql`
+      UPDATE formulas
+      SET precio_venta = ${Number(precioVenta)}
+      WHERE nombre ILIKE ${'%' + q + '%'}
+      RETURNING id, producto_terminado_id, nombre, precio_venta
+    `;
+
+    await sql`COMMIT`;
+
+    return res.json({
+      success: true,
+      q,
+      precio_venta: Number(precioVenta),
+      updated_count: updated.length,
+      updated,
+    });
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) { }
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/', async (req, res) => {
   const error = validarFormula(req.body);
@@ -143,13 +201,13 @@ router.post('/', async (req, res) => {
     // Asegurar columna nombre en DB si por alguna razón la migración no se ejecutó
     try {
       await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE formulas ADD COLUMN costo NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE formulas ADD COLUMN precio_venta NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     const { producto_terminado_id, componentes, nombre } = req.body;
     const { costo, precio_venta } = req.body;
     // `tamano_id` es legacy y ya no se utiliza: las presentaciones se modelan como filas en `formulas`.
@@ -182,7 +240,7 @@ router.put('/:id', async (req, res) => {
     // Asegurar columna nombre en DB si por alguna razón la migración no se ejecutó
     try {
       await sql`ALTER TABLE formulas ADD COLUMN nombre VARCHAR(200);`;
-    } catch (e) {}
+    } catch (e) { }
     const { producto_terminado_id, componentes, nombre } = req.body;
     const { costo, precio_venta } = req.body;
     await sql`BEGIN`;
@@ -216,7 +274,7 @@ router.put('/:id', async (req, res) => {
   } catch (err) {
     try {
       await sql`ROLLBACK`;
-    } catch (e) {}
+    } catch (e) { }
     res.status(500).json({ error: err.message });
   }
 });
@@ -244,7 +302,7 @@ router.delete('/:id', async (req, res) => {
   } catch (err) {
     try {
       await sql`ROLLBACK`;
-    } catch (e) {}
+    } catch (e) { }
     res.status(500).json({ error: err.message });
   }
 });
@@ -417,9 +475,10 @@ router.post('/:id/produccion', async (req, res) => {
   } catch (err) {
     try {
       await sql`ROLLBACK`;
-    } catch (e) {}
+    } catch (e) { }
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 module.exports = router;
