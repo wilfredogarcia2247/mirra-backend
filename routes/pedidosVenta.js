@@ -4,6 +4,63 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { spawn } = require('child_process');
 
+const WHATSAPP_MS_URL = process.env.WHATSAPP_MS_URL || 'http://localhost:3005';
+
+function formatOrderWhatsappPayload(pedido, lineas) {
+  const items = (lineas || []).map((linea) => {
+    const quantity = Number(linea.cantidad || 0);
+    const unitPrice = Number(linea.precio_venta || 0);
+    return {
+      name: linea.nombre_producto || `Producto ${linea.producto_id}`,
+      quantity,
+      price: unitPrice,
+    };
+  });
+
+  const total = items.reduce((acc, item) => acc + item.quantity * item.price, 0);
+
+  return {
+    orderId: pedido.id,
+    customerName: pedido.nombre_cliente || 'Cliente',
+    total,
+    paymentMethod: 'Registrado en sistema',
+    address: 'N/D',
+    items,
+  };
+}
+
+async function notifyOrderCompletedByWhatsapp(pedido, lineas) {
+  try {
+    const to = pedido?.telefono ? String(pedido.telefono).trim() : '';
+    if (!to) return;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    let response;
+    try {
+      response = await fetch(`${WHATSAPP_MS_URL}/api/messages/order-success`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to,
+          order: formatOrderWhatsappPayload(pedido, lineas),
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn('[whatsapp] No se pudo notificar pedido:', text || response.statusText);
+    }
+  } catch (error) {
+    console.warn('[whatsapp] Error enviando notificacion:', error.message);
+  }
+}
+
 function validarPedido(body) {
   if (!body.cliente_id || isNaN(Number(body.cliente_id))) return 'ID de cliente requerido';
   if (!Array.isArray(body.productos) || body.productos.length === 0) return 'Productos requeridos';
@@ -854,6 +911,9 @@ async function completarPedidoTransaccional(pedidoId) {
     }
   }
   await sql`COMMIT`;
+
+  notifyOrderCompletedByWhatsapp(pedido, lineas).catch(() => {});
+
   return { success: true, pedido_id: pedidoId, movimientos, pago: pagoInserted };
 }
 
