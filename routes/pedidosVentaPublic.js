@@ -10,8 +10,8 @@ function formatOrderWhatsappNotificationPayload(pedido) {
     id: pedido.id,
     nombre_cliente: pedido.nombre_cliente,
     telefono: pedido.telefono,
-    cedula: pedido.cedula,
     total: pedido.total,
+    tasa_cambio_monto: pedido.tasa_cambio_monto,
     items: Array.isArray(pedido.productos)
       ? pedido.productos.map((p) => ({
           name: p.producto_nombre,
