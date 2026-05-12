@@ -10,11 +10,14 @@ function formatOrderWhatsappNotificationPayload(pedido) {
     id: pedido.id,
     nombre_cliente: pedido.nombre_cliente,
     telefono: pedido.telefono,
+    cedula: pedido.cedula,
     total: pedido.total,
     items: Array.isArray(pedido.productos)
       ? pedido.productos.map((p) => ({
           name: p.producto_nombre,
           quantity: Number(p.cantidad || 0),
+          unitPrice: p.precio_venta,
+          subtotal: p.subtotal,
         }))
       : [],
   };
