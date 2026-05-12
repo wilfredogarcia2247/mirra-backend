@@ -3,6 +3,51 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
+const WHATSAPP_MS_URL = process.env.WHATSAPP_MS_URL || 'http://localhost:3005';
+
+function formatOrderWhatsappNotificationPayload(pedido) {
+  return {
+    id: pedido.id,
+    nombre_cliente: pedido.nombre_cliente,
+    telefono: pedido.telefono,
+    total: pedido.total,
+    items: Array.isArray(pedido.productos)
+      ? pedido.productos.map((p) => ({
+          name: p.producto_nombre,
+          quantity: Number(p.cantidad || 0),
+        }))
+      : [],
+  };
+}
+
+async function notifyOrderCreatedByWhatsapp(pedido) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    let response;
+    try {
+      response = await fetch(`${WHATSAPP_MS_URL}/api/messages/order-notification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order: formatOrderWhatsappNotificationPayload(pedido),
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn('[whatsapp] No se pudo enviar alerta de nuevo pedido:', text || response.statusText);
+    }
+  } catch (error) {
+    console.warn('[whatsapp] Error enviando alerta de nuevo pedido:', error.message);
+  }
+}
+
 function validarPedido(body) {
   // Para pedidos públicos `cliente_id` es opcional (puede venir null/0).
   if (body.cliente_id != null && body.cliente_id !== '' && isNaN(Number(body.cliente_id)))
@@ -171,6 +216,8 @@ router.post('/', async (req, res) => {
         produccionesCreadas: [],
         producciones: [],
       };
+
+      notifyOrderCreatedByWhatsapp(pedidoObj);
       res.status(201).json(pedidoObj);
     } catch (errTx) {
       try {
