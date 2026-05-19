@@ -2,8 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
-
-const WHATSAPP_MS_URL = process.env.WHATSAPP_MS_URL || 'http://localhost:3005';
+const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
 
 function formatOrderWhatsappNotificationPayload(pedido) {
   return {
@@ -25,27 +24,15 @@ function formatOrderWhatsappNotificationPayload(pedido) {
 
 async function notifyOrderCreatedByWhatsapp(pedido) {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    let response;
-    try {
-      response = await fetch(`${WHATSAPP_MS_URL}/api/messages/order-notification`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order: formatOrderWhatsappNotificationPayload(pedido),
-        }),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.warn('[whatsapp] No se pudo enviar alerta de nuevo pedido:', text || response.statusText);
-    }
+    const order = formatOrderWhatsappNotificationPayload(pedido);
+    const to = order.telefono;
+    if (!to) return;
+    const message = formatOrderNotificationMessage(order);
+    await sendTextMessage({
+      to,
+      text: message,
+      meta: { type: 'order-notification', orderId: pedido?.id || null },
+    });
   } catch (error) {
     console.warn('[whatsapp] Error enviando alerta de nuevo pedido:', error.message);
   }

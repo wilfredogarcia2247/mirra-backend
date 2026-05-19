@@ -3,8 +3,7 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { spawn } = require('child_process');
-
-const WHATSAPP_MS_URL = process.env.WHATSAPP_MS_URL || 'http://localhost:3005';
+const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
 
 function formatOrderWhatsappPayload(pedido, lineas) {
   const items = (lineas || []).map((linea) => {
@@ -34,28 +33,12 @@ async function notifyOrderCompletedByWhatsapp(pedido, lineas) {
     const to = pedido?.telefono ? String(pedido.telefono).trim() : '';
     if (!to) return;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    let response;
-    try {
-      response = await fetch(`${WHATSAPP_MS_URL}/api/messages/order-success`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to,
-          order: formatOrderWhatsappPayload(pedido, lineas),
-        }),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.warn('[whatsapp] No se pudo notificar pedido:', text || response.statusText);
-    }
+    const message = formatOrderSuccessMessage(formatOrderWhatsappPayload(pedido, lineas));
+    await sendTextMessage({
+      to,
+      text: message,
+      meta: { type: 'order-success', orderId: pedido?.id || null },
+    });
   } catch (error) {
     console.warn('[whatsapp] Error enviando notificacion:', error.message);
   }

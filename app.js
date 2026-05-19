@@ -73,6 +73,7 @@ app.use((req, res, next) => {
 
 const swaggerUi = require('swagger-ui-express');
 const swaggerDocument = require('./swagger.json');
+const whatsappRoutes = require('./routes/whatsapp');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -103,6 +104,7 @@ app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
 
 // Endpoint público para obtener la tasa de cambio activa
 app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
+app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
 // Rutas protegidas
 app.use('/api/productos', authMiddleware, require('./routes/productos'));
@@ -126,10 +128,18 @@ app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 app.use('/api/marcas', authMiddleware, require('./routes/marcas'));
 // Imágenes
 app.use('/api/images', require('./routes/imagenes'));
+app.use('/api/whatsapp', authMiddleware, whatsappRoutes);
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
+});
+
+app.use((err, req, res, next) => {
+  const status = err && Number.isInteger(err.status) ? err.status : 500;
+  const message = err && err.message ? err.message : 'Error interno';
+  console.error('API error:', message);
+  return res.status(status).json({ ok: false, error: message });
 });
 
 module.exports = app;
