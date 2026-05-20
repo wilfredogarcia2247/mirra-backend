@@ -84,30 +84,38 @@ function formatOrderNotificationMessage(order) {
     return `${totalBs.toFixed(2).replace('.', ',')}bs`;
   };
 
-  const itemNumberEmoji = ['1)', '2)', '3)', '4)', '5)', '6)', '7)', '8)', '9)', '10)'];
+  const itemNumberEmoji = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
   const customerName = order.customerName || order.nombre_cliente || 'Cliente';
+  const orderId = order.orderId || order.id || 'N/D';
+  const cedula = order.cedula || order.documento || 'N/D';
 
   const lines = [];
-  lines.push('Nueva compra en Mirra Perfumeria');
+  lines.push('🌟 *Nueva compra en Mirra Perfumeria* 🌟');
   lines.push('');
   lines.push(`Hola ${customerName}, gracias por elegirnos. Hemos recibido tu pedido con exito:`);
   lines.push('');
-  lines.push(`Pedido: #${order.orderId || order.id || 'N/D'}`);
-  lines.push(`Cliente: ${customerName}`);
-  lines.push(`Total a pagar: ${formatTotalBs(order.total, order.tasa_cambio_monto)}`);
+  lines.push(`📝 *Pedido:* #${orderId}`);
+  lines.push(`👤 *Cliente:* ${customerName}`);
+  lines.push(`💳 *Cedula:* ${cedula}`);
+  lines.push(`💰 *Total a pagar:* ${formatTotalBs(order.total, order.tasa_cambio_monto)}`);
 
   if (Array.isArray(order.items) && order.items.length > 0) {
     lines.push('');
-    lines.push('Tu seleccion:');
+    lines.push('🛍️ *Tu seleccion:*');
     lines.push('');
     order.items.forEach((item, index) => {
       const badge = itemNumberEmoji[index] || `${index + 1}.`;
-      lines.push(`${badge} ${item.name || 'Producto'} x${item.quantity || 1}`);
+      const productName = item.name || 'Producto';
+      const presentation = item.presentation || item.presentacion || item.size || item.tamano || null;
+      const presentationText = presentation ? ` - ${presentation}` : '';
+      lines.push(`${badge} *${productName}*${presentationText} x${item.quantity || 1}`);
     });
   }
 
   lines.push('');
-  lines.push('Por favor, confirmanos este pedido respondiendo a este mensaje o enviando tu comprobante de pago.');
+  lines.push(
+    '✨ Por favor, confirmanos este pedido respondiendo a este mensaje o enviando tu comprobante de pago.',
+  );
   lines.push('');
   lines.push('Gracias por confiar en nosotros.');
   return lines.join('\n');
