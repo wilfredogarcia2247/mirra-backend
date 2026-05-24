@@ -176,24 +176,9 @@ Estas relaciones se infieren por nombres de columnas:
 - `precio_venta_final`: precio final calculado con margen y factor.
 - `tasa` / `tasa_cambio_monto`: conversion monetaria aplicada en pagos o pedidos.
 
-## 6) Ejemplos de datos reales (pendiente)
+## 6) Ejemplos de datos reales
 
-Completar cuando envies registros por tabla. Recomendado incluir 3-10 filas por tabla en formato JSON o tabla.
-
-Plantilla sugerida por tabla:
-
-```json
-{
-  "tabla": "nombre_tabla",
-  "muestras": [
-    {
-      "columna_1": "valor",
-      "columna_2": 123
-    }
-  ],
-  "notas": "Reglas o particularidades observadas en los datos reales"
-}
-```
+Se consolidaron en el archivo `DB_DATA_EXAMPLES.md` con muestras por tabla y notas semanticas.
 
 ## 7) Checklist para enriquecer este contexto
 
