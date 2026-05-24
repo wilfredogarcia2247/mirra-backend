@@ -184,84 +184,62 @@ async function getComponentesForLine(productoId, formulaId, formulaNombre, produ
 
 router.get('/', async (req, res) => {
   try {
-    // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó en este entorno
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) { }
-    const pedidos = await sql`SELECT * FROM pedidos_venta`;
-    const pedidosConDetalle = [];
-    for (const p of pedidos) {
-      const productos = await sql`
-          SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
-            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
-            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-            COALESCE(pv.costo_unitario, prod.costo) AS costo,
-            pv.orden_produccion_id,
-            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
-            prod.image_url,
-            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
-           FROM pedido_venta_productos pv
-           LEFT JOIN productos prod ON prod.id = pv.producto_id
-           LEFT JOIN formulas f ON f.id = pv.formula_id
-           LEFT JOIN (
-             SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
-             FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
-           ) op ON op.producto_terminado_id = prod.id
-           WHERE pv.pedido_venta_id = ${p.id}
-        `;
-      // Normalizar tipos y calcular subtotales
-      let total = 0;
-      const productosMapeados = productos.map((item) => {
-        const cantidad = Number(item.cantidad);
-        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
-        const costo = item.costo != null ? parseFloat(item.costo) : null;
-        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
-        total += subtotal;
-        return {
-          id: item.id,
-          pedido_venta_id: item.pedido_venta_id,
-          producto_id: item.producto_id,
-          formula_id: item.formula_id || null,
-          formula_nombre: item.formula_nombre || null,
-          orden_produccion_id: item.orden_produccion_id || null,
-          produccion_creada: !!item.produccion_creada,
-          cantidad,
-          producto_nombre: item.producto_nombre,
-          produccion_completada: !!item.produccion_completada,
-          precio_venta: isNaN(precio) ? null : precio,
-          costo: costo,
-          image_url: item.image_url,
-          subtotal,
-        };
-      });
+    const rows = await sql`
+      SELECT
+        p.*,
+        pv.id AS pv_id,
+        pv.pedido_venta_id,
+        pv.producto_id,
+        pv.cantidad,
+        pv.formula_id,
+        COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+        COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+        COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+        COALESCE(pv.costo_unitario, prod.costo) AS costo,
+        pv.orden_produccion_id,
+        COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+        prod.image_url,
+        (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+      FROM pedidos_venta p
+      LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = p.id
+      LEFT JOIN productos prod ON prod.id = pv.producto_id
+      LEFT JOIN formulas f ON f.id = pv.formula_id
+      LEFT JOIN (
+        SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+        FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+      ) op ON op.producto_terminado_id = prod.id
+      ORDER BY p.id DESC, pv.id ASC
+    `;
 
-      // No incluir componentes en la respuesta: el front usará `formula_id` para crear la orden de producción
-      pedidosConDetalle.push({
-        ...p,
-        productos: productosMapeados,
-        total,
+    const map = new Map();
+    for (const row of rows || []) {
+      if (!map.has(row.id)) map.set(row.id, { ...row, productos: [], total: 0 });
+      if (row.pv_id == null) continue;
+      const cantidad = Number(row.cantidad);
+      const precio = row.precio_venta != null ? parseFloat(row.precio_venta) : 0;
+      const costo = row.costo != null ? parseFloat(row.costo) : null;
+      const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+      const pedido = map.get(row.id);
+      pedido.total += subtotal;
+      pedido.productos.push({
+        id: row.pv_id,
+        pedido_venta_id: row.pedido_venta_id,
+        producto_id: row.producto_id,
+        formula_id: row.formula_id || null,
+        formula_nombre: row.formula_nombre || null,
+        orden_produccion_id: row.orden_produccion_id || null,
+        produccion_creada: !!row.produccion_creada,
+        cantidad,
+        producto_nombre: row.producto_nombre,
+        produccion_completada: !!row.produccion_completada,
+        precio_venta: isNaN(precio) ? null : precio,
+        costo,
+        image_url: row.image_url,
+        subtotal,
       });
     }
-    res.json(pedidosConDetalle);
+
+    res.json(Array.from(map.values()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -273,23 +251,6 @@ router.post('/', async (req, res) => {
   try {
     const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } =
       req.body;
-
-    // Asegurar columnas de snapshot y para referencia a fórmula por si la migración no se ejecutó
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
-    } catch (e) { }
 
     await sql`BEGIN`;
     try {
@@ -543,59 +504,65 @@ router.get('/paginated', async (req, res) => {
     const countResult = await sql`SELECT COUNT(*) FROM pedidos_venta`;
     const total = parseInt(countResult[0].count);
 
-    const pedidos = await sql`SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}`;
-    const pedidosConDetalle = [];
-    for (const p of pedidos) {
-      const productos = await sql`
-          SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
-            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
-            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-            COALESCE(pv.costo_unitario, prod.costo) AS costo,
-            pv.orden_produccion_id,
-            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
-            prod.image_url,
-            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
-           FROM pedido_venta_productos pv
-           LEFT JOIN productos prod ON prod.id = pv.producto_id
-           LEFT JOIN formulas f ON f.id = pv.formula_id
-           LEFT JOIN (
-             SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
-             FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
-           ) op ON op.producto_terminado_id = prod.id
-           WHERE pv.pedido_venta_id = ${p.id}
-        `;
-      let totalPedido = 0;
-      const productosMapeados = productos.map((item) => {
-        const cantidad = Number(item.cantidad);
-        const precio = item.precio_venta != null ? parseFloat(item.precio_venta) : 0;
-        const costo = item.costo != null ? parseFloat(item.costo) : null;
-        const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
-        totalPedido += subtotal;
-        return {
-          id: item.id,
-          pedido_venta_id: item.pedido_venta_id,
-          producto_id: item.producto_id,
-          formula_id: item.formula_id || null,
-          formula_nombre: item.formula_nombre || null,
-          orden_produccion_id: item.orden_produccion_id || null,
-          produccion_creada: !!item.produccion_creada,
-          cantidad,
-          producto_nombre: item.producto_nombre,
-          produccion_completada: !!item.produccion_completada,
-          precio_venta: isNaN(precio) ? null : precio,
-          costo: costo,
-          image_url: item.image_url,
-          subtotal,
-        };
-      });
+    const rows = await sql`
+      WITH selected AS (
+        SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
+      )
+      SELECT
+        s.*,
+        pv.id AS pv_id,
+        pv.pedido_venta_id,
+        pv.producto_id,
+        pv.cantidad,
+        pv.formula_id,
+        COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+        COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+        COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+        COALESCE(pv.costo_unitario, prod.costo) AS costo,
+        pv.orden_produccion_id,
+        COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+        prod.image_url,
+        (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+      FROM selected s
+      LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
+      LEFT JOIN productos prod ON prod.id = pv.producto_id
+      LEFT JOIN formulas f ON f.id = pv.formula_id
+      LEFT JOIN (
+        SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+        FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+      ) op ON op.producto_terminado_id = prod.id
+      ORDER BY s.id DESC, pv.id ASC
+    `;
 
-      pedidosConDetalle.push({
-        ...p,
-        productos: productosMapeados,
-        total: totalPedido,
+    const map = new Map();
+    for (const row of rows || []) {
+      if (!map.has(row.id)) map.set(row.id, { ...row, productos: [], total: 0 });
+      if (row.pv_id == null) continue;
+      const cantidad = Number(row.cantidad);
+      const precio = row.precio_venta != null ? parseFloat(row.precio_venta) : 0;
+      const costo = row.costo != null ? parseFloat(row.costo) : null;
+      const subtotal = cantidad * (isNaN(precio) ? 0 : precio);
+      const pedido = map.get(row.id);
+      pedido.total += subtotal;
+      pedido.productos.push({
+        id: row.pv_id,
+        pedido_venta_id: row.pedido_venta_id,
+        producto_id: row.producto_id,
+        formula_id: row.formula_id || null,
+        formula_nombre: row.formula_nombre || null,
+        orden_produccion_id: row.orden_produccion_id || null,
+        produccion_creada: !!row.produccion_creada,
+        cantidad,
+        producto_nombre: row.producto_nombre,
+        produccion_completada: !!row.produccion_completada,
+        precio_venta: isNaN(precio) ? null : precio,
+        costo,
+        image_url: row.image_url,
+        subtotal,
       });
     }
+
+    const pedidosConDetalle = Array.from(map.values());
     res.json({
       data: pedidosConDetalle,
       total,
@@ -608,15 +575,160 @@ router.get('/paginated', async (req, res) => {
   }
 });
 
+// Endpoint optimizado para reportes (evita N+1 y payload innecesario)
+router.get('/reportes-resumen', async (req, res) => {
+  try {
+    const rows = await sql`
+      SELECT
+        pv.id,
+        pv.estado,
+        pv.fecha,
+        pv.nombre_cliente,
+        pv.telefono,
+        pv.cedula,
+        pvp.producto_id,
+        pvp.cantidad,
+        COALESCE(pvp.nombre_producto, prod.nombre) AS nombre_producto,
+        COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
+      FROM pedidos_venta pv
+      LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      ORDER BY pv.id DESC
+    `;
+
+    const byPedidoId = new Map();
+    for (const row of rows || []) {
+      if (!byPedidoId.has(row.id)) {
+        byPedidoId.set(row.id, {
+          id: row.id,
+          estado: row.estado,
+          fecha: row.fecha,
+          nombre_cliente: row.nombre_cliente,
+          telefono: row.telefono,
+          cedula: row.cedula,
+          productos: [],
+          total: 0,
+        });
+      }
+
+      if (row.producto_id != null) {
+        const cantidad = Number(row.cantidad || 0);
+        const precio = Number(row.precio_venta || 0);
+        const subtotal = cantidad * precio;
+        const pedido = byPedidoId.get(row.id);
+        pedido.productos.push({
+          producto_id: row.producto_id,
+          cantidad,
+          precio_venta: precio,
+          nombre_producto: row.nombre_producto,
+          subtotal,
+        });
+        pedido.total += subtotal;
+      }
+    }
+
+    res.json(Array.from(byPedidoId.values()));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/clientes-top-resumen', async (req, res) => {
+  try {
+    const limitRaw = Number(req.query.limit || 10);
+    const pedidosLimitRaw = Number(req.query.pedidos_limit || 5);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 10;
+    const pedidosLimit = Number.isFinite(pedidosLimitRaw)
+      ? Math.min(Math.max(pedidosLimitRaw, 1), 20)
+      : 5;
+
+    const rows = await sql`
+      WITH pedidos_totales AS (
+        SELECT
+          pv.id,
+          pv.fecha,
+          pv.estado,
+          COALESCE(NULLIF(TRIM(pv.nombre_cliente), ''), 'Cliente sin nombre') AS cliente_nombre,
+          COALESCE(NULLIF(TRIM(pv.telefono), ''), NULLIF(TRIM(pv.cedula), ''), NULLIF(TRIM(pv.nombre_cliente), ''), CONCAT('cliente-', pv.id::text)) AS cliente_key,
+          COUNT(pvp.id)::int AS items_count,
+          COALESCE(SUM(COALESCE(pvp.cantidad, 0) * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0) AS total
+        FROM pedidos_venta pv
+        LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+        LEFT JOIN productos prod ON prod.id = pvp.producto_id
+        WHERE LOWER(COALESCE(pv.estado, '')) IN ('completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado')
+        GROUP BY pv.id, pv.fecha, pv.estado, cliente_nombre, cliente_key
+      ),
+      top_clientes AS (
+        SELECT
+          cliente_key,
+          MAX(cliente_nombre) AS cliente_nombre,
+          COUNT(*)::int AS pedidos_count,
+          COALESCE(SUM(total), 0) AS monto_total
+        FROM pedidos_totales
+        GROUP BY cliente_key
+        ORDER BY COALESCE(SUM(total), 0) DESC
+        LIMIT ${limit}
+      ),
+      pedidos_rank AS (
+        SELECT
+          pt.*,
+          ROW_NUMBER() OVER (PARTITION BY pt.cliente_key ORDER BY pt.fecha DESC, pt.id DESC) AS rn
+        FROM pedidos_totales pt
+        INNER JOIN top_clientes tc ON tc.cliente_key = pt.cliente_key
+      )
+      SELECT
+        tc.cliente_key,
+        tc.cliente_nombre,
+        tc.pedidos_count,
+        tc.monto_total,
+        pr.id AS pedido_id,
+        pr.fecha AS pedido_fecha,
+        pr.estado AS pedido_estado,
+        pr.total AS pedido_total,
+        pr.items_count AS pedido_items_count
+      FROM top_clientes tc
+      LEFT JOIN pedidos_rank pr ON pr.cliente_key = tc.cliente_key AND pr.rn <= ${pedidosLimit}
+      ORDER BY tc.monto_total DESC, tc.cliente_nombre ASC, pr.fecha DESC, pr.id DESC
+    `;
+
+    const grouped = [];
+    const byKey = new Map();
+    for (const row of rows || []) {
+      if (!byKey.has(row.cliente_key)) {
+        const clientObj = {
+          cliente_key: row.cliente_key,
+          nombre: row.cliente_nombre,
+          pedidos: Number(row.pedidos_count || 0),
+          monto: Number(row.monto_total || 0),
+          pedidos_resumen: [],
+        };
+        byKey.set(row.cliente_key, clientObj);
+        grouped.push(clientObj);
+      }
+
+      if (row.pedido_id != null) {
+        byKey.get(row.cliente_key).pedidos_resumen.push({
+          id: row.pedido_id,
+          fecha: row.pedido_fecha,
+          estado: row.pedido_estado,
+          total: Number(row.pedido_total || 0),
+          items_count: Number(row.pedido_items_count || 0),
+        });
+      }
+    }
+
+    res.json({
+      limit,
+      pedidos_limit: pedidosLimit,
+      data: grouped,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
-    // Asegurar columnas de orden/flag por si la migración no se ejecutó en este entorno
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) { }
     const pedido = await sql`SELECT * FROM pedidos_venta WHERE id = ${req.params.id}`;
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const productos = await sql`
@@ -1090,15 +1202,6 @@ router.post('/:id/items', async (req, res) => {
       await sql`ROLLBACK`;
       return res.status(400).json({ error: `No se pueden agregar líneas a un pedido con estado ${pedido.estado}` });
     }
-
-    // asegurar columnas defensivas
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`; } catch (e) { }
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`; } catch (e) { }
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`; } catch (e) { }
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`; } catch (e) { }
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`; } catch (e) { }
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`; } catch (e) { }
-    try { await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`; } catch (e) { }
 
     for (const p of productos) {
       // Comportamiento consistente con endpoint público: guardar snapshot preferiendo datos de la fórmula cuando exista.
@@ -1594,14 +1697,6 @@ router.post('/:pedidoId/lineas/:lineaId/ordenes-produccion', async (req, res) =>
       await sql`ROLLBACK`;
       return res.status(500).json({ error: 'No se pudo crear la orden de producción' });
     }
-
-    // Asegurar columnas antes de actualizar la línea (defensivo)
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) { }
-    try {
-      await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) { }
 
     // Actualizar la línea del pedido para vincular la orden y marcar produccion_creada
     await sql`

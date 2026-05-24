@@ -47,6 +47,51 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/resumen-metodo-moneda', async (req, res) => {
+  try {
+    const rows = await sql`
+      SELECT
+        COALESCE(f.nombre, 'Metodo no definido') AS metodo,
+        COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA') AS moneda,
+        COUNT(*)::int AS cantidad,
+        COALESCE(SUM(COALESCE(p.monto, 0)), 0) AS monto
+      FROM pagos p
+      LEFT JOIN formas_pago f ON f.id = p.forma_pago_id
+      LEFT JOIN bancos b ON b.id = p.banco_id
+      GROUP BY COALESCE(f.nombre, 'Metodo no definido'), COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA')
+      ORDER BY COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC, COALESCE(f.nombre, 'Metodo no definido') ASC
+    `;
+
+    const byMethod = {};
+    for (const row of rows || []) {
+      const metodo = row.metodo;
+      if (!byMethod[metodo]) {
+        byMethod[metodo] = { metodo, monto_total: 0, cantidad_total: 0, monedas: [] };
+      }
+      const monto = Number(row.monto || 0);
+      const cantidad = Number(row.cantidad || 0);
+      byMethod[metodo].monto_total += monto;
+      byMethod[metodo].cantidad_total += cantidad;
+      byMethod[metodo].monedas.push({
+        moneda: row.moneda,
+        monto,
+        cantidad,
+      });
+    }
+
+    const data = Object.values(byMethod)
+      .map((item) => ({
+        ...item,
+        monedas: item.monedas.sort((a, b) => b.monto - a.monto),
+      }))
+      .sort((a, b) => b.monto_total - a.monto_total);
+
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const error = validarPago(req.body);
   if (error) return res.status(400).json({ error });
