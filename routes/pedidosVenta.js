@@ -5,6 +5,18 @@ const sql = neon(process.env.DATABASE_URL);
 const { spawn } = require('child_process');
 const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
 
+const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
+const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
+
+function logQueryTime(name, startMs, extra) {
+  if (!PROFILE_QUERIES) return;
+  const durationMs = Date.now() - startMs;
+  const isSlow = durationMs >= SLOW_QUERY_MS;
+  const prefix = isSlow ? '[sql:slow]' : '[sql:ok]';
+  const suffix = extra ? ` | ${extra}` : '';
+  console.log(`${prefix} ${name} | ${durationMs}ms${suffix}`);
+}
+
 function formatOrderWhatsappPayload(pedido, lineas) {
   const items = (lineas || []).map((linea) => {
     const quantity = Number(linea.cantidad || 0);
@@ -184,6 +196,7 @@ async function getComponentesForLine(productoId, formulaId, formulaNombre, produ
 
 router.get('/', async (req, res) => {
   try {
+    const qStart = Date.now();
     const rows = await sql`
       SELECT
         p.*,
@@ -210,6 +223,7 @@ router.get('/', async (req, res) => {
       ) op ON op.producto_terminado_id = prod.id
       ORDER BY p.id DESC, pv.id ASC
     `;
+    logQueryTime('pedidosVenta.getAll', qStart, `rows=${rows?.length || 0}`);
 
     const map = new Map();
     for (const row of rows || []) {
@@ -501,9 +515,12 @@ router.get('/paginated', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
+    const countStart = Date.now();
     const countResult = await sql`SELECT COUNT(*) FROM pedidos_venta`;
+    logQueryTime('pedidosVenta.paginated.count', countStart);
     const total = parseInt(countResult[0].count);
 
+    const pageStart = Date.now();
     const rows = await sql`
       WITH selected AS (
         SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
@@ -533,6 +550,11 @@ router.get('/paginated', async (req, res) => {
       ) op ON op.producto_terminado_id = prod.id
       ORDER BY s.id DESC, pv.id ASC
     `;
+    logQueryTime(
+      'pedidosVenta.paginated.data',
+      pageStart,
+      `page=${page} limit=${limit} rows=${rows?.length || 0}`
+    );
 
     const map = new Map();
     for (const row of rows || []) {
@@ -578,6 +600,7 @@ router.get('/paginated', async (req, res) => {
 // Endpoint optimizado para reportes (evita N+1 y payload innecesario)
 router.get('/reportes-resumen', async (req, res) => {
   try {
+    const qStart = Date.now();
     const rows = await sql`
       SELECT
         pv.id,
@@ -595,6 +618,7 @@ router.get('/reportes-resumen', async (req, res) => {
       LEFT JOIN productos prod ON prod.id = pvp.producto_id
       ORDER BY pv.id DESC
     `;
+    logQueryTime('pedidosVenta.reportesResumen', qStart, `rows=${rows?.length || 0}`);
 
     const byPedidoId = new Map();
     for (const row of rows || []) {
@@ -642,6 +666,7 @@ router.get('/clientes-top-resumen', async (req, res) => {
       ? Math.min(Math.max(pedidosLimitRaw, 1), 20)
       : 5;
 
+    const qStart = Date.now();
     const rows = await sql`
       WITH pedidos_totales AS (
         SELECT
@@ -690,6 +715,11 @@ router.get('/clientes-top-resumen', async (req, res) => {
       LEFT JOIN pedidos_rank pr ON pr.cliente_key = tc.cliente_key AND pr.rn <= ${pedidosLimit}
       ORDER BY tc.monto_total DESC, tc.cliente_nombre ASC, pr.fecha DESC, pr.id DESC
     `;
+    logQueryTime(
+      'pedidosVenta.clientesTopResumen',
+      qStart,
+      `limit=${limit} pedidos_limit=${pedidosLimit} rows=${rows?.length || 0}`
+    );
 
     const grouped = [];
     const byKey = new Map();
@@ -729,8 +759,12 @@ router.get('/clientes-top-resumen', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
+    const pedidoStart = Date.now();
     const pedido = await sql`SELECT * FROM pedidos_venta WHERE id = ${req.params.id}`;
+    logQueryTime('pedidosVenta.getById.pedido', pedidoStart, `pedidoId=${req.params.id}`);
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
+
+    const lineasStart = Date.now();
     const productos = await sql`
       SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
              COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
@@ -750,6 +784,7 @@ router.get('/:id', async (req, res) => {
       ) op ON op.producto_terminado_id = prod.id
       WHERE pv.pedido_venta_id = ${req.params.id}
     `;
+    logQueryTime('pedidosVenta.getById.lineas', lineasStart, `pedidoId=${req.params.id} rows=${productos?.length || 0}`);
     let total = 0;
     const productosMapeados = productos.map((item) => {
       const cantidad = Number(item.cantidad);
