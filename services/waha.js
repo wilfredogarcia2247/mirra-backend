@@ -7,6 +7,8 @@ const MAX_INCOMING_MESSAGES = 100;
 const recentOutboundMessages = [];
 const MAX_OUTBOUND_MESSAGES = 200;
 
+const ITEM_NUMBER_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
 function getHeaders(extra = {}) {
   return {
     'Content-Type': 'application/json',
@@ -52,39 +54,54 @@ function toChatId(phone) {
   return `${digits}@c.us`;
 }
 
+function formatTotalBs(totalDivisa, tasaCambio) {
+  const total = Number(totalDivisa);
+  const tasa = Number(tasaCambio);
+  if (!Number.isFinite(total) || !Number.isFinite(tasa) || tasa <= 0) return 'N/D';
+  const totalBs = total * tasa;
+  return `${totalBs.toFixed(2).replace('.', ',')}bs`;
+}
+
 function formatOrderSuccessMessage(order) {
+  const customerName = order.customerName || order.nombre_cliente || 'Cliente';
+  const orderId = order.orderId || order.id || 'N/D';
+  const cedula = order.cedula || order.documento || 'N/D';
+  const totalBs = formatTotalBs(order.total, order.tasa_cambio_monto);
+  const totalLabel = totalBs !== 'N/D'
+    ? totalBs
+    : (order.total_formatted || order.total || 'N/D');
+
   const lines = [];
-  lines.push('Tu pedido fue exitoso.');
+  lines.push('🌟 *Pedido confirmado en Mirra Perfumeria* 🌟');
   lines.push('');
-  lines.push(`Pedido: ${order.orderId || 'N/D'}`);
-  lines.push(`Cliente: ${order.customerName || 'N/D'}`);
-  lines.push(`Total: ${order.total || 'N/D'}`);
-  lines.push(`Metodo de pago: ${order.paymentMethod || 'N/D'}`);
-  lines.push(`Direccion: ${order.address || 'N/D'}`);
+  lines.push(`Hola ${customerName}, hemos confirmado tu pedido con exito:`);
+  lines.push('');
+  lines.push(`📝 *Pedido:* #${orderId}`);
+  lines.push(`👤 *Cliente:* ${customerName}`);
+  lines.push(`💳 *Cedula:* ${cedula}`);
+  lines.push(`💰 *Total cancelado:* ${totalLabel}`);
 
   if (Array.isArray(order.items) && order.items.length > 0) {
     lines.push('');
-    lines.push('Detalle:');
+    lines.push('🛍️ *Tu seleccion:*');
+    lines.push('');
     order.items.forEach((item, index) => {
-      lines.push(
-        `${index + 1}. ${item.name || 'Producto'} x${item.quantity || 1} - ${item.price || 'N/D'}`
-      );
+      const badge = ITEM_NUMBER_EMOJI[index] || `${index + 1}.`;
+      const productName = item.name || 'Producto';
+      const presentation = item.presentation || item.presentacion || item.size || item.tamano || null;
+      const presentationText = presentation ? ` - ${presentation}` : '';
+      lines.push(`${badge} *${productName}*${presentationText} x${item.quantity || 1}`);
     });
   }
 
+  lines.push('');
+  lines.push('✅ Gracias por tu confirmacion. Tu pedido esta en proceso.');
+  lines.push('');
+  lines.push('Seguimos a tu orden.');
   return lines.join('\n');
 }
 
 function formatOrderNotificationMessage(order) {
-  const formatTotalBs = (totalDivisa, tasaCambio) => {
-    const total = Number(totalDivisa);
-    const tasa = Number(tasaCambio);
-    if (!Number.isFinite(total) || !Number.isFinite(tasa) || tasa <= 0) return 'N/D';
-    const totalBs = total * tasa;
-    return `${totalBs.toFixed(2).replace('.', ',')}bs`;
-  };
-
-  const itemNumberEmoji = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
   const customerName = order.customerName || order.nombre_cliente || 'Cliente';
   const orderId = order.orderId || order.id || 'N/D';
   const cedula = order.cedula || order.documento || 'N/D';
@@ -104,7 +121,7 @@ function formatOrderNotificationMessage(order) {
     lines.push('🛍️ *Tu seleccion:*');
     lines.push('');
     order.items.forEach((item, index) => {
-      const badge = itemNumberEmoji[index] || `${index + 1}.`;
+      const badge = ITEM_NUMBER_EMOJI[index] || `${index + 1}.`;
       const productName = item.name || 'Producto';
       const presentation = item.presentation || item.presentacion || item.size || item.tamano || null;
       const presentationText = presentation ? ` - ${presentation}` : '';
