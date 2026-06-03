@@ -1042,8 +1042,6 @@ async function completarPedidoTransaccional(pedidoId) {
   }
   await sql`COMMIT`;
 
-  notifyOrderCompletedByWhatsapp(pedido, lineas).catch(() => {});
-
   return { success: true, pedido_id: pedidoId, movimientos, pago: pagoInserted };
 }
 
