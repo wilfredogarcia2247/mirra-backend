@@ -657,6 +657,101 @@ router.get('/reportes-resumen', async (req, res) => {
   }
 });
 
+router.get('/reportes-presentaciones', async (req, res) => {
+  try {
+    const estadosVendidos = [
+      'completado',
+      'completada',
+      'completa',
+      'finalizado',
+      'finalizada',
+      'entregado',
+      'pagado',
+      'terminado',
+    ];
+
+    const qStart = Date.now();
+    const rows = await sql`
+      WITH lineas AS (
+        SELECT
+          (COALESCE(NULLIF(TRIM(pvp.cantidad::text), ''), '0'))::numeric AS cantidad,
+          LOWER(COALESCE(pvp.nombre_producto, pvp.formula_nombre, prod.nombre, '')) AS nombre_lower,
+          DATE_TRUNC('month', pv.fecha)::date AS fecha_mes
+        FROM pedidos_venta pv
+        INNER JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+        LEFT JOIN productos prod ON prod.id = pvp.producto_id
+        WHERE LOWER(COALESCE(pv.estado, '')) = ANY(${estadosVendidos})
+      ),
+      normalizados AS (
+        SELECT
+          cantidad,
+          fecha_mes,
+          CASE
+            WHEN nombre_lower = '' THEN NULL
+            ELSE SUBSTRING(nombre_lower FROM '([0-9]+(?:\\.[0-9]+)?)\\s*ml')
+          END AS ml_text
+        FROM lineas
+      ),
+      presentaciones AS (
+        SELECT
+          cantidad,
+          fecha_mes,
+          CASE
+            WHEN ml_text IS NULL THEN NULL
+            ELSE (ml_text)::numeric
+          END AS ml_numeric
+        FROM normalizados
+      ),
+      series AS (
+        SELECT
+          CASE
+            WHEN ml_numeric IS NULL THEN 'Sin presentación (ml)'
+            ELSE CONCAT(ml_numeric::text, 'ml')
+          END AS presentacion_ml,
+          ml_numeric,
+          fecha_mes,
+          TO_CHAR(fecha_mes, 'YYYY-MM') AS month_key,
+          SUM(cantidad)::numeric AS unidades_vendidas_mes
+        FROM presentaciones
+        GROUP BY presentacion_ml, ml_numeric, fecha_mes
+      )
+      SELECT
+        presentacion_ml,
+        SUM(unidades_vendidas_mes)::numeric AS unidades_vendidas,
+        MAX(ml_numeric) AS ml_numeric,
+        COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+              'month', month_key,
+              'unidades_vendidas', unidades_vendidas_mes
+            ) ORDER BY month_key
+          ) FILTER (WHERE month_key IS NOT NULL),
+          '[]'::jsonb
+        ) AS ventas_mensuales
+      FROM series
+      GROUP BY presentacion_ml, ml_numeric
+      ORDER BY ml_numeric NULLS LAST, presentacion_ml
+    `;
+    logQueryTime('pedidosVenta.reportesPresentaciones', qStart, `rows=${rows?.length || 0}`);
+
+    res.json(
+      rows.map((row) => ({
+        presentacion_ml: row.presentacion_ml,
+        unidades_vendidas: row.unidades_vendidas != null ? Number(row.unidades_vendidas) : 0,
+        ventas_mensuales: Array.isArray(row.ventas_mensuales)
+          ? row.ventas_mensuales.map((item) => ({
+              month: item?.month || null,
+              unidades_vendidas:
+                item?.unidades_vendidas != null ? Number(item.unidades_vendidas) : 0,
+            }))
+          : [],
+      }))
+    );
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/clientes-top-resumen', async (req, res) => {
   try {
     const limitRaw = Number(req.query.limit || 10);
