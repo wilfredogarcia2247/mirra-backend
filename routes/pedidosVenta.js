@@ -17,6 +17,171 @@ function logQueryTime(name, startMs, extra) {
   console.log(`${prefix} ${name} | ${durationMs}ms${suffix}`);
 }
 
+const AJUSTE_TIPOS = new Set(['descuento', 'recargo']);
+const AJUSTE_MODOS = new Set(['porcentaje', 'monto']);
+let ajustesTableEnsured = false;
+
+async function ensurePedidoAjustesTable() {
+  if (ajustesTableEnsured) return;
+  await sql`
+    CREATE TABLE IF NOT EXISTS pedido_venta_ajustes (
+      id SERIAL PRIMARY KEY,
+      pedido_venta_id INT NOT NULL,
+      tipo VARCHAR(20) NOT NULL,
+      modo VARCHAR(20) NOT NULL,
+      valor NUMERIC NOT NULL,
+      motivo TEXT NOT NULL,
+      created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pedido_venta_ajustes_pedido ON pedido_venta_ajustes (pedido_venta_id)`;
+  ajustesTableEnsured = true;
+}
+
+function roundCurrency(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 100) / 100;
+}
+
+function normalizeAjustesInput(rawAjustes) {
+  if (rawAjustes == null) return [];
+  if (!Array.isArray(rawAjustes)) {
+    const err = new Error('Formato de ajustes inválido');
+    err.code = 'INVALID_AJUSTES';
+    throw err;
+  }
+  return rawAjustes.map((item, index) => {
+    const idxLabel = index + 1;
+    if (!item || typeof item !== 'object') {
+      const err = new Error(`Ajuste #${idxLabel}: formato inválido`);
+      err.code = 'INVALID_AJUSTES';
+      throw err;
+    }
+    const tipoRaw = String(item.tipo || '').trim().toLowerCase();
+    if (!AJUSTE_TIPOS.has(tipoRaw)) {
+      const err = new Error(`Ajuste #${idxLabel}: tipo inválido (usar descuento/recargo)`);
+      err.code = 'INVALID_AJUSTES';
+      throw err;
+    }
+    const modoRaw = String(item.modo || '').trim().toLowerCase();
+    if (!AJUSTE_MODOS.has(modoRaw)) {
+      const err = new Error(`Ajuste #${idxLabel}: modo inválido (usar porcentaje/monto)`);
+      err.code = 'INVALID_AJUSTES';
+      throw err;
+    }
+    const valorNum = Number(item.valor);
+    if (!Number.isFinite(valorNum) || valorNum <= 0) {
+      const err = new Error(`Ajuste #${idxLabel}: valor debe ser numérico y mayor a cero`);
+      err.code = 'INVALID_AJUSTES';
+      throw err;
+    }
+    const motivoRaw = String(item.motivo || '').trim();
+    if (!motivoRaw) {
+      const err = new Error(`Ajuste #${idxLabel}: motivo requerido`);
+      err.code = 'INVALID_AJUSTES';
+      throw err;
+    }
+    return {
+      tipo: tipoRaw,
+      modo: modoRaw,
+      valor: roundCurrency(valorNum),
+      motivo: motivoRaw,
+    };
+  });
+}
+
+function computeAjustesBreakdown(baseTotal, ajustes) {
+  const base = roundCurrency(baseTotal || 0);
+  const list = Array.isArray(ajustes) ? ajustes : [];
+  let totalDescuentos = 0;
+  let totalRecargos = 0;
+  const decorated = list.map((ajuste) => {
+    const tipo = String(ajuste.tipo || '').toLowerCase();
+    const modo = String(ajuste.modo || '').toLowerCase();
+    const valorNum = roundCurrency(ajuste.valor || 0);
+    const montoAplicado = modo === 'porcentaje'
+      ? roundCurrency(base * (valorNum / 100))
+      : roundCurrency(valorNum);
+    if (tipo === 'descuento') totalDescuentos += montoAplicado;
+    else if (tipo === 'recargo') totalRecargos += montoAplicado;
+    return { ...ajuste, tipo, modo, valor: valorNum, monto_aplicado: montoAplicado };
+  });
+  totalDescuentos = roundCurrency(totalDescuentos);
+  totalRecargos = roundCurrency(totalRecargos);
+  let totalFinal = roundCurrency(base - totalDescuentos + totalRecargos);
+  if (totalFinal < 0) totalFinal = 0;
+  return {
+    ajustes: decorated,
+    total_base: base,
+    total_descuentos: totalDescuentos,
+    total_recargos: totalRecargos,
+    total_final: totalFinal,
+  };
+}
+
+async function fetchAjustesMapByPedidoIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return new Map();
+  await ensurePedidoAjustesTable();
+  const rows = await sql`
+    SELECT id, pedido_venta_id, tipo, modo, valor, motivo, created_at
+    FROM pedido_venta_ajustes
+    WHERE pedido_venta_id = ANY(${ids})
+    ORDER BY created_at ASC, id ASC
+  `;
+  const map = new Map();
+  for (const row of rows || []) {
+    if (!map.has(row.pedido_venta_id)) map.set(row.pedido_venta_id, []);
+    map.get(row.pedido_venta_id).push({
+      id: row.id,
+      pedido_venta_id: row.pedido_venta_id,
+      tipo: row.tipo,
+      modo: row.modo,
+      valor: row.valor != null ? Number(row.valor) : 0,
+      motivo: row.motivo,
+      created_at: row.created_at,
+    });
+  }
+  return map;
+}
+
+async function attachAjustesToPedidos(pedidos) {
+  if (!Array.isArray(pedidos) || pedidos.length === 0) return pedidos;
+  const ids = Array.from(
+    new Set(
+      pedidos
+        .map((p) => Number(p?.id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )
+  );
+  if (ids.length === 0) {
+    for (const pedido of pedidos) {
+      pedido.ajustes = [];
+      const base = roundCurrency(pedido.total_base ?? pedido.total ?? 0);
+      const breakdown = computeAjustesBreakdown(base, []);
+      pedido.total_base = breakdown.total_base;
+      pedido.total_descuentos = breakdown.total_descuentos;
+      pedido.total_recargos = breakdown.total_recargos;
+      pedido.total_final = breakdown.total_final;
+      pedido.total = pedido.total_final;
+    }
+    return pedidos;
+  }
+  const ajustesMap = await fetchAjustesMapByPedidoIds(ids);
+  for (const pedido of pedidos) {
+    const base = roundCurrency(pedido.total_base ?? pedido.total ?? 0);
+    const ajustes = ajustesMap.get(Number(pedido.id)) || [];
+    const breakdown = computeAjustesBreakdown(base, ajustes);
+    pedido.ajustes = breakdown.ajustes;
+    pedido.total_base = breakdown.total_base;
+    pedido.total_descuentos = breakdown.total_descuentos;
+    pedido.total_recargos = breakdown.total_recargos;
+    pedido.total_final = breakdown.total_final;
+    pedido.total = pedido.total_final;
+  }
+  return pedidos;
+}
+
 function formatOrderWhatsappPayload(pedido, lineas) {
   const items = (lineas || []).map((linea) => {
     const quantity = Number(linea.cantidad || 0);
@@ -253,7 +418,9 @@ router.get('/', async (req, res) => {
       });
     }
 
-    res.json(Array.from(map.values()));
+    const pedidos = Array.from(map.values());
+    await attachAjustesToPedidos(pedidos);
+    res.json(pedidos);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -352,6 +519,7 @@ router.post('/', async (req, res) => {
         };
       });
       const pedidoObj = { ...(pedidoRows && pedidoRows[0] ? pedidoRows[0] : {}), productos: productosMapeados, total };
+      await attachAjustesToPedidos([pedidoObj]);
       return res.status(201).json(pedidoObj);
     } catch (errTx) {
       try {
@@ -492,6 +660,8 @@ router.get('/buscar', async (req, res) => {
       });
     }
 
+    await attachAjustesToPedidos(pedidosConDetalle);
+
     // Si solo hay un resultado y es búsqueda por ID, devolver directamente el objeto
     if (isNumericSearch && pedidosConDetalle.length === 1) {
       return res.json(pedidosConDetalle[0]);
@@ -585,6 +755,7 @@ router.get('/paginated', async (req, res) => {
     }
 
     const pedidosConDetalle = Array.from(map.values());
+    await attachAjustesToPedidos(pedidosConDetalle);
     res.json({
       data: pedidosConDetalle,
       total,
@@ -906,125 +1077,119 @@ router.get('/:id', async (req, res) => {
     });
     // No incluir componentes: el front recibirá `formula_id` y `formula_nombre` para crear la orden de producción
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
+    await attachAjustesToPedidos([pedidoObj]);
     res.json(pedidoObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Helper transaccional para completar un pedido: consume reservas y marca Completado
-async function completarPedidoTransaccional(pedidoId) {
-  // completarPedidoTransaccional ahora puede recibir un objeto pago opcional al llamarlo;
-  // si no se facilita, se llamará sin pago. Para compatibilidad, revisamos arguments
-  const pagoObj = arguments && arguments[1] ? arguments[1] : null;
-  await sql`BEGIN`;
-  const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
-  if (!pedidoRows || pedidoRows.length === 0) {
-    await sql`ROLLBACK`;
-    const e = new Error('Pedido no encontrado');
-    e.code = 'NOT_FOUND';
-    throw e;
-  }
-  const pedido = pedidoRows[0];
-  if (pedido.estado === 'Completado') {
-    await sql`ROLLBACK`;
-    const e = new Error('Pedido ya completado');
-    e.code = 'ALREADY_COMPLETED';
-    throw e;
+// Helper transaccional para completar un pedido: consume reservas, aplica ajustes y marca Completado
+async function completarPedidoTransaccional(pedidoId, options) {
+  let pagoObj = null;
+  let ajustesRaw = null;
+
+  if (options && typeof options === 'object' && !Array.isArray(options)) {
+    const hasPagoKey = Object.prototype.hasOwnProperty.call(options, 'pago');
+    const hasAjustesKey = Object.prototype.hasOwnProperty.call(options, 'ajustes');
+    if (hasPagoKey || hasAjustesKey) {
+      if (hasPagoKey) pagoObj = options.pago || null;
+      if (hasAjustesKey) ajustesRaw = options.ajustes;
+    } else {
+      pagoObj = options;
+    }
+  } else if (options) {
+    pagoObj = options;
   }
 
-  const lineas =
-    await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+  let ajustesSanitizados = null;
+  if (ajustesRaw != null) {
+    ajustesSanitizados = normalizeAjustesInput(ajustesRaw);
+  }
+
+  if (ajustesSanitizados !== null) {
+    await ensurePedidoAjustesTable();
+  }
+
+  let baseTotal = 0;
   const movimientos = [];
+  let pagoInserted = null;
 
-  for (const linea of lineas) {
-    let qtyNeeded = Number(linea.cantidad);
-    if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
+  await sql`BEGIN`;
+  try {
+    const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidoRows || pedidoRows.length === 0) {
       await sql`ROLLBACK`;
-      const e = new Error('Cantidad inválida en líneas del pedido');
-      e.code = 'INVALID_QTY';
+      const e = new Error('Pedido no encontrado');
+      e.code = 'NOT_FOUND';
       throw e;
     }
-    // Verificar producción completada suficiente SOLO si la línea refiere a una fórmula (producto producido)
-    if (linea.formula_id) {
-      try {
-        const prodRes = await sql`
-          SELECT COALESCE(SUM(cantidad),0) AS produced FROM ordenes_produccion
-          WHERE producto_terminado_id = ${linea.producto_id} AND estado = 'Completada'
-        `;
-        const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
-        if (produced < qtyNeeded) {
-          await sql`ROLLBACK`;
-          const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
-          e.code = 'NOT_PRODUCED';
-          throw e;
-        }
-      } catch (errCheck) {
-        if (errCheck && errCheck.code === 'NOT_PRODUCED') throw errCheck;
-        // Si falla la comprobación por cualquier motivo, continuar con el flujo de inventario
-      }
-    }
-    // Primero consumir stock comprometido (reservas)
-    const invsReserved = await sql`
-      SELECT i.* FROM inventario i
-      JOIN almacenes a ON a.id = i.almacen_id
-      WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND i.stock_comprometido > 0
-      ORDER BY i.stock_comprometido DESC
-      FOR UPDATE
-    `;
-    for (const inv of invsReserved) {
-      if (qtyNeeded <= 0) break;
-      const committed = Number(inv.stock_comprometido);
-      if (committed <= 0) continue;
-      const take = Math.min(committed, qtyNeeded);
-      const consumed = await sql`
-        UPDATE inventario
-        SET stock_fisico = stock_fisico - ${take}, stock_comprometido = stock_comprometido - ${take}
-        WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0 AND stock_comprometido >= ${take}
-        RETURNING id, stock_fisico, stock_comprometido, almacen_id
-      `;
-      if (!consumed || consumed.length === 0) {
-        await sql`ROLLBACK`;
-        const e = new Error(
-          `No se pudo consumir inventario reservado para producto ${linea.producto_id}`
-        );
-        e.code = 'INVENTORY_CONFLICT';
-        throw e;
-      }
-      await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id
-        }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
-      movimientos.push({
-        producto_id: linea.producto_id,
-        almacen_id: inv.almacen_id,
-        cantidad: take,
-      });
-      qtyNeeded -= take;
+    const pedido = pedidoRows[0];
+    if (pedido.estado === 'Completado') {
+      await sql`ROLLBACK`;
+      const e = new Error('Pedido ya completado');
+      e.code = 'ALREADY_COMPLETED';
+      throw e;
     }
 
-    // Si aún falta cantidad, consumir desde stock disponible (stock_fisico - stock_comprometido)
-    if (qtyNeeded > 0) {
-      const invsAvailable = await sql`
+    const lineas = await sql`SELECT * FROM pedido_venta_productos WHERE pedido_venta_id = ${pedidoId}`;
+    for (const linea of lineas || []) {
+      const cantidad = Number(linea.cantidad);
+      const precio = Number(linea.precio_venta);
+      if (Number.isFinite(cantidad) && Number.isFinite(precio)) {
+        baseTotal += cantidad * precio;
+      }
+    }
+    baseTotal = roundCurrency(baseTotal);
+
+    for (const linea of lineas) {
+      let qtyNeeded = Number(linea.cantidad);
+      if (isNaN(qtyNeeded) || qtyNeeded <= 0) {
+        await sql`ROLLBACK`;
+        const e = new Error('Cantidad inválida en líneas del pedido');
+        e.code = 'INVALID_QTY';
+        throw e;
+      }
+      if (linea.formula_id) {
+        try {
+          const prodRes = await sql`
+            SELECT COALESCE(SUM(cantidad),0) AS produced FROM ordenes_produccion
+            WHERE producto_terminado_id = ${linea.producto_id} AND estado = 'Completada'
+          `;
+          const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
+          if (produced < qtyNeeded) {
+            await sql`ROLLBACK`;
+            const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
+            e.code = 'NOT_PRODUCED';
+            throw e;
+          }
+        } catch (errCheck) {
+          if (errCheck && errCheck.code === 'NOT_PRODUCED') throw errCheck;
+        }
+      }
+
+      const invsReserved = await sql`
         SELECT i.* FROM inventario i
         JOIN almacenes a ON a.id = i.almacen_id
-        WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND (i.stock_fisico - i.stock_comprometido) > 0
-        ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+        WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND i.stock_comprometido > 0
+        ORDER BY i.stock_comprometido DESC
         FOR UPDATE
       `;
-      for (const inv of invsAvailable) {
+      for (const inv of invsReserved) {
         if (qtyNeeded <= 0) break;
-        const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido || 0);
-        if (available <= 0) continue;
-        const take = Math.min(available, qtyNeeded);
+        const committed = Number(inv.stock_comprometido);
+        if (committed <= 0) continue;
+        const take = Math.min(committed, qtyNeeded);
         const consumed = await sql`
           UPDATE inventario
-          SET stock_fisico = stock_fisico - ${take}
-          WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0
+          SET stock_fisico = stock_fisico - ${take}, stock_comprometido = stock_comprometido - ${take}
+          WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0 AND stock_comprometido >= ${take}
           RETURNING id, stock_fisico, stock_comprometido, almacen_id
         `;
         if (!consumed || consumed.length === 0) {
           await sql`ROLLBACK`;
           const e = new Error(
-            `No se pudo consumir inventario disponible para producto ${linea.producto_id}`
+            `No se pudo consumir inventario reservado para producto ${linea.producto_id}`
           );
           e.code = 'INVENTORY_CONFLICT';
           throw e;
@@ -1038,106 +1203,170 @@ async function completarPedidoTransaccional(pedidoId) {
         });
         qtyNeeded -= take;
       }
+
+      if (qtyNeeded > 0) {
+        const invsAvailable = await sql`
+          SELECT i.* FROM inventario i
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE i.producto_id = ${linea.producto_id} AND a.tipo IN ('venta','interno') AND (i.stock_fisico - i.stock_comprometido) > 0
+          ORDER BY (i.stock_fisico - i.stock_comprometido) DESC
+          FOR UPDATE
+        `;
+        for (const inv of invsAvailable) {
+          if (qtyNeeded <= 0) break;
+          const available = Number(inv.stock_fisico) - Number(inv.stock_comprometido || 0);
+          if (available <= 0) continue;
+          const take = Math.min(available, qtyNeeded);
+          const consumed = await sql`
+            UPDATE inventario
+            SET stock_fisico = stock_fisico - ${take}
+            WHERE id = ${inv.id} AND stock_fisico - ${take} >= 0
+            RETURNING id, stock_fisico, stock_comprometido, almacen_id
+          `;
+          if (!consumed || consumed.length === 0) {
+            await sql`ROLLBACK`;
+            const e = new Error(
+              `No se pudo consumir inventario disponible para producto ${linea.producto_id}`
+            );
+            e.code = 'INVENTORY_CONFLICT';
+            throw e;
+          }
+          await sql`INSERT INTO inventario_movimientos (producto_id, almacen_id, tipo, cantidad, motivo) VALUES (${linea.producto_id
+            }, ${inv.almacen_id}, 'salida', ${take}, ${'Venta pedido ' + pedidoId})`;
+          movimientos.push({
+            producto_id: linea.producto_id,
+            almacen_id: inv.almacen_id,
+            cantidad: take,
+          });
+          qtyNeeded -= take;
+        }
+      }
+
+      if (qtyNeeded > 0) {
+        await sql`ROLLBACK`;
+        const e = new Error(`Stock insuficiente para producto ${linea.producto_id}`);
+        e.code = 'INSUFFICIENT_STOCK';
+        throw e;
+      }
     }
 
-    if (qtyNeeded > 0) {
-      await sql`ROLLBACK`;
-      const e = new Error(`Stock insuficiente para producto ${linea.producto_id}`);
-      e.code = 'INSUFFICIENT_STOCK';
-      throw e;
+    if (ajustesSanitizados !== null) {
+      const preview = computeAjustesBreakdown(baseTotal, ajustesSanitizados);
+      if (preview.total_descuentos > preview.total_base) {
+        await sql`ROLLBACK`;
+        const e = new Error('Los descuentos superan el total del pedido');
+        e.code = 'INVALID_AJUSTES';
+        throw e;
+      }
+      await sql`DELETE FROM pedido_venta_ajustes WHERE pedido_venta_id = ${pedidoId}`;
+      for (const adj of ajustesSanitizados) {
+        await sql`
+          INSERT INTO pedido_venta_ajustes (pedido_venta_id, tipo, modo, valor, motivo)
+          VALUES (${pedidoId}, ${adj.tipo}, ${adj.modo}, ${adj.valor}, ${adj.motivo})
+        `;
+      }
     }
-  }
 
-  await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
-  // Insertar pago si viene información
-  let pagoInserted = null;
-  if (pagoObj) {
-    try {
-      // Asegurar tabla pagos existe (defensivo)
-      try {
-        await sql`CREATE TABLE IF NOT EXISTS pagos (
-          id SERIAL PRIMARY KEY,
-          pedido_venta_id INT,
-          forma_pago_id INT,
-          banco_id INT,
-          monto NUMERIC,
-          referencia TEXT,
-          fecha_transaccion TIMESTAMP,
-          fecha TIMESTAMP,
-          tasa NUMERIC,
-          tasa_simbolo VARCHAR(10)
-        );`;
-      } catch (e) { }
+    await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
 
-      // Determinar tasa a aplicar según la moneda del banco (si se provee banco_id)
-      let tasaVal = null;
-      let tasaSimbolo = null;
+    if (pagoObj) {
       try {
-        // Priorizar la moneda del banco y su tasa activa si está disponible
-        if (pagoObj.banco_id != null) {
-          try {
-            const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pagoObj.banco_id}`;
-            const moneda =
-              bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
-            if (moneda) {
-              const tasaRow =
-                await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
-              if (tasaRow && tasaRow[0]) {
-                tasaVal = tasaRow[0].monto;
-                tasaSimbolo = moneda; // usar el símbolo del banco
+        try {
+          await sql`CREATE TABLE IF NOT EXISTS pagos (
+            id SERIAL PRIMARY KEY,
+            pedido_venta_id INT,
+            forma_pago_id INT,
+            banco_id INT,
+            monto NUMERIC,
+            referencia TEXT,
+            fecha_transaccion TIMESTAMP,
+            fecha TIMESTAMP,
+            tasa NUMERIC,
+            tasa_simbolo VARCHAR(10)
+          );`;
+        } catch (e) { }
+
+        let tasaVal = null;
+        let tasaSimbolo = null;
+        try {
+          if (pagoObj.banco_id != null) {
+            try {
+              const bancoRow = await sql`SELECT moneda FROM bancos WHERE id = ${pagoObj.banco_id}`;
+              const moneda =
+                bancoRow && bancoRow[0] && bancoRow[0].moneda ? bancoRow[0].moneda : null;
+              if (moneda) {
+                const tasaRow =
+                  await sql`SELECT monto FROM tasas_cambio WHERE simbolo = ${moneda} LIMIT 1`;
+                if (tasaRow && tasaRow[0]) {
+                  tasaVal = tasaRow[0].monto;
+                  tasaSimbolo = moneda;
+                }
               }
+            } catch (e) { }
+          }
+          if (tasaVal == null && pagoObj.banco_id != null && pagoObj.forma_pago_id != null) {
+            try {
+              const bf =
+                await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pagoObj.banco_id} AND forma_pago_id = ${pagoObj.forma_pago_id} LIMIT 1`;
+              if (bf && bf[0] && bf[0].detalles) {
+                const det = bf[0].detalles;
+                if (det.tasa != null) tasaVal = det.tasa;
+                if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo;
+                else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
+        } catch (e) {
+        }
+        if (tasaVal == null) {
+          try {
+            const anyT =
+              await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
+            if (anyT && anyT[0]) {
+              tasaVal = anyT[0].monto;
+              tasaSimbolo = anyT[0].simbolo;
             }
           } catch (e) { }
         }
-        // Si no se obtuvo tasa desde la moneda del banco, intentar detalles por combinación banco+forma
-        if (tasaVal == null && pagoObj.banco_id != null && pagoObj.forma_pago_id != null) {
-          try {
-            const bf =
-              await sql`SELECT detalles FROM banco_formas_pago WHERE banco_id = ${pagoObj.banco_id} AND forma_pago_id = ${pagoObj.forma_pago_id} LIMIT 1`;
-            if (bf && bf[0] && bf[0].detalles) {
-              const det = bf[0].detalles;
-              if (det.tasa != null) tasaVal = det.tasa;
-              if (det.tasa_simbolo && !tasaSimbolo) tasaSimbolo = det.tasa_simbolo;
-              else if (det.simbolo && !tasaSimbolo) tasaSimbolo = det.simbolo;
-            }
-          } catch (e) {
-            // ignore
-          }
-        }
+
+        const inserted = await sql`
+          INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
+          VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto
+          }, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${tasaVal || null
+          }, ${tasaSimbolo || null}) RETURNING *
+        `;
+        pagoInserted = inserted && inserted[0] ? inserted[0] : null;
       } catch (e) {
-        // ignore, fallback below
+        await sql`ROLLBACK`;
+        const err = new Error('Error registrando pago: ' + e.message);
+        err.code = 'PAYMENT_INSERT_ERROR';
+        throw err;
       }
-      // Fallback: si no encontramos una tasa específica, usar la tasa activa cualquiera
-      if (tasaVal == null) {
-        try {
-          const anyT =
-            await sql`SELECT monto, simbolo FROM tasas_cambio WHERE activo = TRUE LIMIT 1`;
-          if (anyT && anyT[0]) {
-            tasaVal = anyT[0].monto;
-            tasaSimbolo = anyT[0].simbolo;
-          }
-        } catch (e) { }
-      }
-
-      // Insertar registro de pago incluyendo tasa y símbolo
-      const inserted = await sql`
-        INSERT INTO pagos (pedido_venta_id, forma_pago_id, banco_id, monto, referencia, fecha_transaccion, fecha, tasa, tasa_simbolo)
-        VALUES (${pedidoId}, ${pagoObj.forma_pago_id}, ${pagoObj.banco_id || null}, ${pagoObj.monto
-        }, ${pagoObj.referencia || null}, ${pagoObj.fecha_transaccion || null}, NOW(), ${tasaVal || null
-        }, ${tasaSimbolo || null}) RETURNING *
-      `;
-      pagoInserted = inserted && inserted[0] ? inserted[0] : null;
-    } catch (e) {
-      // Si falla la inserción de pago, rollback para mantener atomicidad
-      await sql`ROLLBACK`;
-      const err = new Error('Error registrando pago: ' + e.message);
-      err.code = 'PAYMENT_INSERT_ERROR';
-      throw err;
     }
-  }
-  await sql`COMMIT`;
 
-  return { success: true, pedido_id: pedidoId, movimientos, pago: pagoInserted };
+    await sql`COMMIT`;
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) { }
+    throw err;
+  }
+
+  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal }];
+  await attachAjustesToPedidos(resumen);
+  const enriched = resumen[0];
+
+  return {
+    success: true,
+    pedido_id: pedidoId,
+    movimientos,
+    pago: pagoInserted,
+    ajustes: enriched.ajustes,
+    total_base: enriched.total_base,
+    total_descuentos: enriched.total_descuentos,
+    total_recargos: enriched.total_recargos,
+    total_final: enriched.total_final,
+  };
 }
 
 // POST /api/pedidos-venta/:id/completar (usa helper transaccional)
@@ -1150,11 +1379,19 @@ router.post('/:id/completar', async (req, res) => {
   console.log('-------------------------------------------');
 
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
-  const pago = req.body && req.body.pago ? req.body.pago : null;
+  const body = req.body || {};
+  const pago = body && body.pago ? body.pago : null;
   const pagoError = validarPagoObj(pago);
   if (pagoError) return res.status(400).json({ error: pagoError });
   try {
-    const result = await completarPedidoTransaccional(pedidoId, pago);
+    const hasAjustes = Object.prototype.hasOwnProperty.call(body, 'ajustes');
+    const options = {};
+    if (pago) options.pago = pago;
+    if (hasAjustes) options.ajustes = body.ajustes;
+    const optionsProvided = Object.keys(options).length > 0;
+    const result = optionsProvided
+      ? await completarPedidoTransaccional(pedidoId, options)
+      : await completarPedidoTransaccional(pedidoId);
     return res.json(result);
   } catch (err) {
     if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
@@ -1163,6 +1400,7 @@ router.post('/:id/completar', async (req, res) => {
     if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED' || err.code === 'INSUFFICIENT_STOCK')
       return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+    if (err.code === 'INVALID_AJUSTES') return res.status(400).json({ error: err.message });
     if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
     console.error(err);
     return res.status(500).json({ error: err.message });
@@ -1179,11 +1417,19 @@ router.post('/:id/finalizar', async (req, res) => {
   console.log('-----------------------------------------');
 
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
-  const pago = req.body && req.body.pago ? req.body.pago : null;
+  const body = req.body || {};
+  const pago = body && body.pago ? body.pago : null;
   const pagoError = validarPagoObj(pago);
   if (pagoError) return res.status(400).json({ error: pagoError });
   try {
-    const result = await completarPedidoTransaccional(pedidoId, pago);
+    const hasAjustes = Object.prototype.hasOwnProperty.call(body, 'ajustes');
+    const options = {};
+    if (pago) options.pago = pago;
+    if (hasAjustes) options.ajustes = body.ajustes;
+    const optionsProvided = Object.keys(options).length > 0;
+    const result = optionsProvided
+      ? await completarPedidoTransaccional(pedidoId, options)
+      : await completarPedidoTransaccional(pedidoId);
     return res.json(result);
   } catch (err) {
     if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
@@ -1192,6 +1438,7 @@ router.post('/:id/finalizar', async (req, res) => {
     if (err.code === 'INVALID_QTY' || err.code === 'INSUFFICIENT_RESERVED' || err.code === 'INSUFFICIENT_STOCK')
       return res.status(400).json({ error: err.message });
     if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+    if (err.code === 'INVALID_AJUSTES') return res.status(400).json({ error: err.message });
     if (err.code === 'PAYMENT_INSERT_ERROR') return res.status(500).json({ error: err.message });
     console.error(err);
     return res.status(500).json({ error: err.message });
@@ -1413,11 +1660,105 @@ router.post('/:id/items', async (req, res) => {
       };
     });
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
+    await attachAjustesToPedidos([pedidoObj]);
     return res.status(201).json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error agregando items al pedido:', err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/:id/ajustes', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
+
+  let ajustesSanitizados;
+  try {
+    const raw = req.body && Object.prototype.hasOwnProperty.call(req.body, 'ajustes')
+      ? req.body.ajustes
+      : req.body;
+    ajustesSanitizados = normalizeAjustesInput(raw);
+  } catch (err) {
+    if (err && err.code === 'INVALID_AJUSTES') {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('Error normalizando ajustes:', err);
+    return res.status(500).json({ error: 'Error procesando ajustes' });
+  }
+
+  try {
+    await ensurePedidoAjustesTable();
+    await sql`BEGIN`;
+    try {
+      const pedidoRows = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+      if (!pedidoRows || pedidoRows.length === 0) {
+        await sql`ROLLBACK`;
+        return res.status(404).json({ error: 'Pedido no encontrado' });
+      }
+      const pedido = pedidoRows[0];
+      if (pedido.estado && String(pedido.estado).toLowerCase() === 'completado') {
+        await sql`ROLLBACK`;
+        return res.status(400).json({ error: 'No se pueden modificar ajustes de un pedido completado' });
+      }
+
+      const lineas = await sql`
+        SELECT cantidad, precio_venta
+        FROM pedido_venta_productos
+        WHERE pedido_venta_id = ${pedidoId}
+      `;
+      let baseTotal = 0;
+      for (const linea of lineas || []) {
+        const cantidad = Number(linea.cantidad);
+        const precio = Number(linea.precio_venta);
+        if (Number.isFinite(cantidad) && Number.isFinite(precio)) {
+          baseTotal += cantidad * precio;
+        }
+      }
+      baseTotal = roundCurrency(baseTotal);
+
+      const preview = computeAjustesBreakdown(baseTotal, ajustesSanitizados);
+      if (preview.total_descuentos > preview.total_base) {
+        await sql`ROLLBACK`;
+        return res.status(400).json({ error: 'Los descuentos superan el total del pedido' });
+      }
+
+      await sql`DELETE FROM pedido_venta_ajustes WHERE pedido_venta_id = ${pedidoId}`;
+      for (const adj of ajustesSanitizados) {
+        await sql`
+          INSERT INTO pedido_venta_ajustes (pedido_venta_id, tipo, modo, valor, motivo)
+          VALUES (${pedidoId}, ${adj.tipo}, ${adj.modo}, ${adj.valor}, ${adj.motivo})
+        `;
+      }
+
+      await sql`COMMIT`;
+
+      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal }];
+      await attachAjustesToPedidos(resumen);
+      const enriched = resumen[0];
+
+      return res.json({
+        ok: true,
+        pedido_id: pedidoId,
+        ajustes: enriched.ajustes,
+        total_base: enriched.total_base,
+        total_descuentos: enriched.total_descuentos,
+        total_recargos: enriched.total_recargos,
+        total_final: enriched.total_final,
+      });
+    } catch (errTx) {
+      try { await sql`ROLLBACK`; } catch (e) { }
+      if (errTx && errTx.code === 'INVALID_AJUSTES') {
+        return res.status(400).json({ error: errTx.message });
+      }
+      throw errTx;
+    }
+  } catch (err) {
+    if (err && err.code === 'INVALID_AJUSTES') {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('Error actualizando ajustes del pedido:', err);
+    return res.status(500).json({ error: 'Error actualizando ajustes del pedido' });
   }
 });
 
@@ -1473,7 +1814,8 @@ router.get('/:id/pagos', async (req, res) => {
 router.put('/:id/status', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
-  const { estado } = req.body;
+  const body = req.body || {};
+  const { estado } = body;
   const allowed = ['Pendiente', 'Enviado', 'Completado', 'Cancelado'];
   if (!estado || !allowed.includes(estado))
     return res.status(400).json({ error: 'Estado inválido' });
@@ -1522,10 +1864,17 @@ router.put('/:id/status', async (req, res) => {
     // Si se solicita Completado, reutilizar la función transaccional
     if (estado === 'Completado') {
       try {
-        const pago = req.body && req.body.pago ? req.body.pago : null;
+        const pago = body && body.pago ? body.pago : null;
         const pagoError = validarPagoObj(pago);
         if (pagoError) return res.status(400).json({ error: pagoError });
-        const result = await completarPedidoTransaccional(pedidoId, pago);
+        const hasAjustes = Object.prototype.hasOwnProperty.call(body, 'ajustes');
+        const options = {};
+        if (pago) options.pago = pago;
+        if (hasAjustes) options.ajustes = body.ajustes;
+        const optionsProvided = Object.keys(options).length > 0;
+        const result = optionsProvided
+          ? await completarPedidoTransaccional(pedidoId, options)
+          : await completarPedidoTransaccional(pedidoId);
         return res.json(result);
       } catch (err) {
         if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
@@ -1534,6 +1883,7 @@ router.put('/:id/status', async (req, res) => {
           return res.status(400).json({ error: err.message });
         if (err.code === 'NOT_PRODUCED') return res.status(400).json({ error: err.message });
         if (err.code === 'INVENTORY_CONFLICT') return res.status(409).json({ error: err.message });
+        if (err.code === 'INVALID_AJUSTES') return res.status(400).json({ error: err.message });
         console.error(err);
         return res.status(500).json({ error: 'Error completando pedido' });
       }
@@ -1928,7 +2278,10 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
 
-  const { almacen_venta_id, pago } = req.body || {};
+  const body = req.body || {};
+  const { almacen_venta_id, pago } = body;
+  const ajustesProvided = Object.prototype.hasOwnProperty.call(body, 'ajustes');
+  const ajustesPayload = ajustesProvided ? body.ajustes : undefined;
   if (!almacen_venta_id || isNaN(Number(almacen_venta_id))) {
     return res.status(400).json({ error: 'almacen_venta_id requerido' });
   }
@@ -2102,7 +2455,13 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
 
     // Luego completar el pedido (inicia su propia transacción)
     try {
-      const result = await completarPedidoTransaccional(pedidoId, pago);
+      const options = {};
+      if (pago) options.pago = pago;
+      if (ajustesProvided) options.ajustes = ajustesPayload;
+      const optionsProvided = Object.keys(options).length > 0;
+      const result = optionsProvided
+        ? await completarPedidoTransaccional(pedidoId, options)
+        : await completarPedidoTransaccional(pedidoId);
       return res.json({
         success: true,
         pedido_id: pedidoId,
@@ -2112,6 +2471,12 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
       });
     } catch (completarErr) {
       // Si falla al completar el pedido, devolver error
+      if (completarErr && completarErr.code === 'INVALID_AJUSTES') {
+        return res.status(400).json({
+          error: completarErr.message,
+          ordenes_completadas: ordenesCompletadas
+        });
+      }
       return res.status(500).json({
         error: 'Órdenes completadas pero error al finalizar pedido',
         details: completarErr.message,

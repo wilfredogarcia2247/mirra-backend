@@ -8,6 +8,7 @@ async function reset() {
     await sql`BEGIN`;
     try {
       // Borrar tablas si existen (uso CASCADE para eliminar dependencias)
+      await sql`DROP TABLE IF EXISTS pedido_venta_ajustes CASCADE`;
       await sql`DROP TABLE IF EXISTS pedido_venta_productos CASCADE`;
       await sql`DROP TABLE IF EXISTS pedidos_venta CASCADE`;
 
@@ -37,6 +38,18 @@ async function reset() {
           costo_unitario NUMERIC,
           precio_venta NUMERIC,
           nombre_producto TEXT
+        )
+      `;
+
+      await sql`
+        CREATE TABLE pedido_venta_ajustes (
+          id SERIAL PRIMARY KEY,
+          pedido_venta_id INT NOT NULL,
+          tipo VARCHAR(20) NOT NULL,
+          modo VARCHAR(20) NOT NULL,
+          valor NUMERIC NOT NULL,
+          motivo TEXT NOT NULL,
+          created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
         )
       `;
 
