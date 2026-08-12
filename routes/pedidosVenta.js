@@ -436,7 +436,7 @@ router.post('/', async (req, res) => {
     await sql`BEGIN`;
     try {
       const insertedPedido =
-        await sql`INSERT INTO pedidos_venta (cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto, fecha) VALUES (${cliente_id}, ${estado}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${tasa_cambio_monto || null}, NOW()) RETURNING *`;
+        await sql`INSERT INTO pedidos_venta (cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto, fecha) VALUES (${cliente_id}, ${estado}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${tasa_cambio_monto || null}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas') RETURNING *`;
       const pedidoId = insertedPedido && insertedPedido[0] ? insertedPedido[0].id : null;
       if (!pedidoId) {
         await sql`ROLLBACK`;

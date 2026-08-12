@@ -120,7 +120,7 @@ router.post('/', async (req, res) => {
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
         VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${
         cedula || null
-      }, ${forcedEstado}, NOW(), ${origenIp || null}, ${
+      }, ${forcedEstado}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas', ${origenIp || null}, ${
         userAgent || null
       }, ${tasaMontoVal}) RETURNING *
       `;
