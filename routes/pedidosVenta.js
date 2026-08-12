@@ -911,10 +911,10 @@ router.get('/reportes-presentaciones', async (req, res) => {
         unidades_vendidas: row.unidades_vendidas != null ? Number(row.unidades_vendidas) : 0,
         ventas_mensuales: Array.isArray(row.ventas_mensuales)
           ? row.ventas_mensuales.map((item) => ({
-              month: item?.month || null,
-              unidades_vendidas:
-                item?.unidades_vendidas != null ? Number(item.unidades_vendidas) : 0,
-            }))
+            month: item?.month || null,
+            unidades_vendidas:
+              item?.unidades_vendidas != null ? Number(item.unidades_vendidas) : 0,
+          }))
           : [],
       }))
     );

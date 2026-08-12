@@ -13,11 +13,11 @@ function formatOrderWhatsappNotificationPayload(pedido) {
     tasa_cambio_monto: pedido.tasa_cambio_monto,
     items: Array.isArray(pedido.productos)
       ? pedido.productos.map((p) => ({
-          name: p.producto_nombre,
-          quantity: Number(p.cantidad || 0),
-          unitPrice: p.precio_venta,
-          subtotal: p.subtotal,
-        }))
+        name: p.producto_nombre,
+        quantity: Number(p.cantidad || 0),
+        unitPrice: p.precio_venta,
+        subtotal: p.subtotal,
+      }))
       : [],
   };
 }
@@ -46,8 +46,8 @@ function validarPedido(body) {
   const productosArray = Array.isArray(body.productos)
     ? body.productos
     : Array.isArray(body.lineas)
-    ? body.lineas
-    : null;
+      ? body.lineas
+      : null;
   if (!Array.isArray(productosArray) || productosArray.length === 0)
     return 'Productos (array `productos` o `lineas`) requeridos';
   for (const p of productosArray) {
@@ -75,33 +75,33 @@ router.post('/', async (req, res) => {
     // Asegurar columnas de snapshot por si la migración no se ejecutó en este entorno
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS nombre_producto TEXT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS formula_nombre TEXT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT;`;
-    } catch (e) {}
+    } catch (e) { }
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
-    } catch (e) {}
+    } catch (e) { }
     // Note: no legacy tamano columns required here.
     const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Compatibilidad: aceptar `productos` o `lineas`
     const productos = Array.isArray(req.body.productos)
       ? req.body.productos
       : Array.isArray(req.body.lineas)
-      ? req.body.lineas
-      : [];
+        ? req.body.lineas
+        : [];
     // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
     const clienteIdValue =
       cliente_id == null || Number(cliente_id) === 0 ? null : Number(cliente_id);
@@ -118,11 +118,9 @@ router.post('/', async (req, res) => {
       // Insertar pedido público (sin validar ni reservar stock)
       const pedido = await sql`
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
-        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${
-        cedula || null
-      }, ${forcedEstado}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas', ${origenIp || null}, ${
-        userAgent || null
-      }, ${tasaMontoVal}) RETURNING *
+        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null
+        }, ${forcedEstado}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas', ${origenIp || null}, ${userAgent || null
+        }, ${tasaMontoVal}) RETURNING *
       `;
 
       for (const p of productos) {
@@ -212,7 +210,7 @@ router.post('/', async (req, res) => {
     } catch (errTx) {
       try {
         await sql`ROLLBACK`;
-      } catch (e) {}
+      } catch (e) { }
       throw errTx;
     }
   } catch (err) {
