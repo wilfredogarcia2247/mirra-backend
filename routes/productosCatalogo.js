@@ -135,27 +135,27 @@ router.get('/', async (req, res) => {
       const inventario =
         p.inventario && Array.isArray(p.inventario)
           ? p.inventario.map((i) => ({
-              id: i.id,
-              almacen_id: i.almacen_id,
-              almacen_nombre: i.almacen_nombre,
-              almacen_tipo: i.almacen_tipo,
-              stock_fisico: Number(i.stock_fisico),
-              stock_comprometido: Number(i.stock_comprometido),
-              stock_disponible: Number(i.stock_disponible),
-            }))
+            id: i.id,
+            almacen_id: i.almacen_id,
+            almacen_nombre: i.almacen_nombre,
+            almacen_tipo: i.almacen_tipo,
+            stock_fisico: Number(i.stock_fisico),
+            stock_comprometido: Number(i.stock_comprometido),
+            stock_disponible: Number(i.stock_disponible),
+          }))
           : [];
       const categoria = p.categoria_id
         ? {
-            id: p.categoria_id,
-            nombre: p.categoria_nombre || null,
-            descripcion: p.categoria_descripcion || null,
-          }
+          id: p.categoria_id,
+          nombre: p.categoria_nombre || null,
+          descripcion: p.categoria_descripcion || null,
+        }
         : null;
       const marca = p.marca_id
         ? {
-            id: p.marca_id,
-            nombre: p.marca_nombre || null,
-          }
+          id: p.marca_id,
+          nombre: p.marca_nombre || null,
+        }
         : null;
       return {
         id: p.id,
