@@ -57,37 +57,53 @@ router.get('/', async (req, res) => {
       }
     }
     const prodIds = (prodIdRows || []).map((r) => r.id);
-    if (prodIds.length === 0) return res.json([]);
-
-    const rows = await sql`
-      SELECT p.*, c.nombre AS categoria_nombre, c.descripcion AS categoria_descripcion, m.nombre AS marca_nombre, COALESCE(inv_tot.stock_disponible_total, 0) AS stock, COALESCE(inv_arr.inventario, '[]'::json) AS inventario
-      FROM productos p
-      LEFT JOIN categorias c ON c.id = p.categoria_id
-      LEFT JOIN marcas m ON m.id = p.marca_id
-      LEFT JOIN (
-        SELECT producto_id, json_agg(json_build_object(
-          'id', i.id,
-          'almacen_id', i.almacen_id,
-          'almacen_nombre', a.nombre,
-          'almacen_tipo', a.tipo,
-          'stock_fisico', i.stock_fisico,
-          'stock_comprometido', i.stock_comprometido,
-          'stock_disponible', (i.stock_fisico - i.stock_comprometido)
-        ) ORDER BY (i.stock_fisico - i.stock_comprometido) DESC) AS inventario
-        FROM inventario i
-        LEFT JOIN almacenes a ON a.id = i.almacen_id
-        WHERE a.es_materia_prima IS NOT TRUE
-        GROUP BY producto_id
-      ) inv_arr ON inv_arr.producto_id = p.id
-      LEFT JOIN (
-        SELECT producto_id, SUM(i.stock_fisico - i.stock_comprometido) AS stock_disponible_total
-        FROM inventario i
-        JOIN almacenes a ON a.id = i.almacen_id
-        WHERE a.es_materia_prima IS NOT TRUE
-        GROUP BY producto_id
-      ) inv_tot ON inv_tot.producto_id = p.id
-      WHERE p.id = ANY(${prodIds})
-    `;
+    let rows;
+    if (prodIds.length === 0) {
+      if (includeOut) {
+        // No hay productos con inventario en almacenes de venta, pero el cliente pidió incluir productos sin stock.
+        // Obtener productos directamente sin join a inventario (usar pattern y limit si aplica)
+        rows = await sql`
+          SELECT p.*, c.nombre AS categoria_nombre, c.descripcion AS categoria_descripcion, m.nombre AS marca_nombre, 0 AS stock, '[]'::json AS inventario
+          FROM productos p
+          LEFT JOIN categorias c ON c.id = p.categoria_id
+          LEFT JOIN marcas m ON m.id = p.marca_id
+          ${patternClause ? sql`WHERE p.nombre ILIKE ${patternClause}` : sql``}
+          ${lim ? sql`LIMIT ${lim}` : sql``}
+        `;
+      } else {
+        return res.json([]);
+      }
+    } else {
+      rows = await sql`
+        SELECT p.*, c.nombre AS categoria_nombre, c.descripcion AS categoria_descripcion, m.nombre AS marca_nombre, COALESCE(inv_tot.stock_disponible_total, 0) AS stock, COALESCE(inv_arr.inventario, '[]'::json) AS inventario
+        FROM productos p
+        LEFT JOIN categorias c ON c.id = p.categoria_id
+        LEFT JOIN marcas m ON m.id = p.marca_id
+        LEFT JOIN (
+          SELECT producto_id, json_agg(json_build_object(
+            'id', i.id,
+            'almacen_id', i.almacen_id,
+            'almacen_nombre', a.nombre,
+            'almacen_tipo', a.tipo,
+            'stock_fisico', i.stock_fisico,
+            'stock_comprometido', i.stock_comprometido,
+            'stock_disponible', (i.stock_fisico - i.stock_comprometido)
+          ) ORDER BY (i.stock_fisico - i.stock_comprometido) DESC) AS inventario
+          FROM inventario i
+          LEFT JOIN almacenes a ON a.id = i.almacen_id
+          WHERE a.es_materia_prima IS NOT TRUE
+          GROUP BY producto_id
+        ) inv_arr ON inv_arr.producto_id = p.id
+        LEFT JOIN (
+          SELECT producto_id, SUM(i.stock_fisico - i.stock_comprometido) AS stock_disponible_total
+          FROM inventario i
+          JOIN almacenes a ON a.id = i.almacen_id
+          WHERE a.es_materia_prima IS NOT TRUE
+          GROUP BY producto_id
+        ) inv_tot ON inv_tot.producto_id = p.id
+        WHERE p.id = ANY(${prodIds})
+      `;
+    }
     // Obtener fórmulas (presentaciones) para los productos listados
     const productIds = (rows || []).map((r) => r.id);
     let formulasRows = [];
