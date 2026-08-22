@@ -55,15 +55,15 @@ router.get('/', async (req, res) => {
       const inventario =
         p.inventario && Array.isArray(p.inventario)
           ? p.inventario.map((i) => ({
-              id: i.id,
-              almacen_id: i.almacen_id,
-              almacen_nombre: i.almacen_nombre,
-              almacen_tipo: i.almacen_tipo,
-              almacen_ubicacion: i.almacen_ubicacion,
-              stock_fisico: Number(i.stock_fisico),
-              stock_comprometido: Number(i.stock_comprometido),
-              stock_disponible: Number(i.stock_disponible),
-            }))
+            id: i.id,
+            almacen_id: i.almacen_id,
+            almacen_nombre: i.almacen_nombre,
+            almacen_tipo: i.almacen_tipo,
+            almacen_ubicacion: i.almacen_ubicacion,
+            stock_fisico: Number(i.stock_fisico),
+            stock_comprometido: Number(i.stock_comprometido),
+            stock_disponible: Number(i.stock_disponible),
+          }))
           : [];
       return {
         ...p,
@@ -101,9 +101,8 @@ router.post('/', async (req, res) => {
     }
     const result = await sql`
       INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo)
-      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${
-      image_url || null
-    }, ${categoria_id || null}, ${marca_id || null}, ${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true})
+      VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${image_url || null
+      }, ${categoria_id || null}, ${marca_id || null}, ${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true})
       RETURNING *
     `;
     res.status(201).json(result[0]);
@@ -148,15 +147,15 @@ router.get('/:id', async (req, res) => {
     const inventario =
       p.inventario && Array.isArray(p.inventario)
         ? p.inventario.map((i) => ({
-            id: i.id,
-            almacen_id: i.almacen_id,
-            almacen_nombre: i.almacen_nombre,
-            almacen_tipo: i.almacen_tipo,
-            almacen_ubicacion: i.almacen_ubicacion,
-            stock_fisico: Number(i.stock_fisico),
-            stock_comprometido: Number(i.stock_comprometido),
-            stock_disponible: Number(i.stock_disponible),
-          }))
+          id: i.id,
+          almacen_id: i.almacen_id,
+          almacen_nombre: i.almacen_nombre,
+          almacen_tipo: i.almacen_tipo,
+          almacen_ubicacion: i.almacen_ubicacion,
+          stock_fisico: Number(i.stock_fisico),
+          stock_comprometido: Number(i.stock_comprometido),
+          stock_disponible: Number(i.stock_disponible),
+        }))
         : [];
     res.json({ ...p, stock: Number(p.stock), inventario });
   } catch (err) {

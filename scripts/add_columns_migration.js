@@ -2,7 +2,7 @@ require('dotenv').config();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
-(async function main(){
+(async function main() {
   try {
     console.log('Conectando y aplicando ALTERs...');
     await sql`ALTER TABLE productos ADD COLUMN IF NOT EXISTS visible_en_catalogo BOOLEAN DEFAULT TRUE`;
