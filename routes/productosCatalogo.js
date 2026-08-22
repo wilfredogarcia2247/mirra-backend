@@ -15,59 +15,43 @@ router.get('/', async (req, res) => {
     const includeOut = includeOutOfStock === 'true';
     const lim = limit && !isNaN(Number(limit)) ? Number(limit) : null;
 
-    // Enriquecer cada producto con inventario por almacén (solo almacenes de venta)
-    // Primero obtener los IDs de productos que tienen inventario en almacenes que NO sean materia prima
     const patternClause = hasQ ? `%${q}%` : null;
     let prodIdRows;
+
     if (hasQ) {
-      if (includeOut) {
-        prodIdRows = await sql`
-          SELECT DISTINCT p.id FROM productos p
-          JOIN inventario i ON i.producto_id = p.id
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE a.es_materia_prima IS NOT TRUE AND p.nombre ILIKE ${patternClause}
-          ${lim ? sql`LIMIT ${lim}` : sql``}
-        `;
-      } else {
-        prodIdRows = await sql`
-          SELECT DISTINCT p.id FROM productos p
-          JOIN inventario i ON i.producto_id = p.id
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE a.es_materia_prima IS NOT TRUE AND p.nombre ILIKE ${patternClause}
-          ${lim ? sql`LIMIT ${lim}` : sql``}
-        `;
-      }
+      prodIdRows = await sql`
+        SELECT DISTINCT p.id
+        FROM productos p
+        JOIN inventario i ON i.producto_id = p.id
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE a.es_materia_prima IS NOT TRUE
+          AND p.visible_en_catalogo IS NOT FALSE
+          AND p.nombre ILIKE ${patternClause}
+        ${lim ? sql`LIMIT ${lim}` : sql``}
+      `;
     } else {
-      if (includeOut) {
-        prodIdRows = await sql`
-          SELECT DISTINCT p.id FROM productos p
-          JOIN inventario i ON i.producto_id = p.id
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE a.es_materia_prima IS NOT TRUE
-          ${lim ? sql`LIMIT ${lim}` : sql``}
-        `;
-      } else {
-        prodIdRows = await sql`
-          SELECT DISTINCT p.id FROM productos p
-          JOIN inventario i ON i.producto_id = p.id
-          JOIN almacenes a ON a.id = i.almacen_id
-          WHERE a.es_materia_prima IS NOT TRUE
-          ${lim ? sql`LIMIT ${lim}` : sql``}
-        `;
-      }
+      prodIdRows = await sql`
+        SELECT DISTINCT p.id
+        FROM productos p
+        JOIN inventario i ON i.producto_id = p.id
+        JOIN almacenes a ON a.id = i.almacen_id
+        WHERE a.es_materia_prima IS NOT TRUE
+          AND p.visible_en_catalogo IS NOT FALSE
+        ${lim ? sql`LIMIT ${lim}` : sql``}
+      `;
     }
+
     const prodIds = (prodIdRows || []).map((r) => r.id);
     let rows;
     if (prodIds.length === 0) {
       if (includeOut) {
-        // No hay productos con inventario en almacenes de venta, pero el cliente pidió incluir productos sin stock.
-        // Obtener productos directamente sin join a inventario (usar pattern y limit si aplica)
         rows = await sql`
           SELECT p.*, c.nombre AS categoria_nombre, c.descripcion AS categoria_descripcion, m.nombre AS marca_nombre, 0 AS stock, '[]'::json AS inventario
           FROM productos p
           LEFT JOIN categorias c ON c.id = p.categoria_id
           LEFT JOIN marcas m ON m.id = p.marca_id
-          ${patternClause ? sql`WHERE p.nombre ILIKE ${patternClause}` : sql``}
+          WHERE p.visible_en_catalogo IS NOT FALSE
+          ${patternClause ? sql`AND p.nombre ILIKE ${patternClause}` : sql``}
           ${lim ? sql`LIMIT ${lim}` : sql``}
         `;
       } else {
@@ -102,6 +86,7 @@ router.get('/', async (req, res) => {
           GROUP BY producto_id
         ) inv_tot ON inv_tot.producto_id = p.id
         WHERE p.id = ANY(${prodIds})
+          AND COALESCE(p.visible_en_catalogo, TRUE) = TRUE
       `;
     }
     // Obtener fórmulas (presentaciones) para los productos listados

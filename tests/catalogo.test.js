@@ -14,4 +14,13 @@ describe('Catálogo público de productos', () => {
       }
     }
   });
+
+  test('no incluye productos marcados como ocultos en el catálogo público', async () => {
+    const res = await request(app).get('/api/productos/catalogo');
+    expect([200, 204]).toContain(res.statusCode);
+    if (Array.isArray(res.body) && res.body.length > 0) {
+      const hidden = res.body.filter((p) => p.visible_en_catalogo === false);
+      expect(hidden).toHaveLength(0);
+    }
+  });
 });

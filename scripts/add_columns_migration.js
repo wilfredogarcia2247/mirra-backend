@@ -5,6 +5,7 @@ const sql = neon(process.env.DATABASE_URL);
 (async function main(){
   try {
     console.log('Conectando y aplicando ALTERs...');
+    await sql`ALTER TABLE productos ADD COLUMN IF NOT EXISTS visible_en_catalogo BOOLEAN DEFAULT TRUE`;
     await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS orden_produccion_id INT`;
     await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE`;
     console.log('ALTERs aplicados. Listando columnas:');
