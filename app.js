@@ -93,6 +93,7 @@ function authMiddleware(req, res, next) {
 
 // Rutas públicas
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/clientes', require('./routes/clientes'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Permitir creación pública de pedidos de venta sin token (POST)

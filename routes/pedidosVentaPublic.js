@@ -3,6 +3,7 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
+const { resolveClienteFromBody } = require('./clientes');
 
 function formatOrderWhatsappNotificationPayload(pedido) {
   return {
@@ -102,9 +103,10 @@ router.post('/', async (req, res) => {
       : Array.isArray(req.body.lineas)
         ? req.body.lineas
         : [];
-    // Si cliente_id no se provee o es 0, lo almacenamos como NULL (pedido público)
+
+    const resolvedCliente = await resolveClienteFromBody(req.body);
     const clienteIdValue =
-      cliente_id == null || Number(cliente_id) === 0 ? null : Number(cliente_id);
+      resolvedCliente && resolvedCliente.cliente_id != null ? Number(resolvedCliente.cliente_id) : null;
     const forcedEstado = 'Pendiente';
     // Capturar IP y User-Agent para trazabilidad
     const origenIp = (req.headers['x-forwarded-for'] || req.ip || '').toString();
@@ -118,9 +120,17 @@ router.post('/', async (req, res) => {
       // Insertar pedido público (sin validar ni reservar stock)
       const pedido = await sql`
         INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
-        VALUES (${clienteIdValue}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null
-        }, ${forcedEstado}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas', ${origenIp || null}, ${userAgent || null
-        }, ${tasaMontoVal}) RETURNING *
+        VALUES (
+          ${clienteIdValue},
+          ${resolvedCliente?.nombre_cliente || nombre_cliente || null},
+          ${resolvedCliente?.telefono || telefono || null},
+          ${resolvedCliente?.cedula || cedula || null},
+          ${forcedEstado},
+          CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas',
+          ${origenIp || null},
+          ${userAgent || null},
+          ${tasaMontoVal}
+        ) RETURNING *
       `;
 
       for (const p of productos) {

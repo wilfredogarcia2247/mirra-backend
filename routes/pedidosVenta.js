@@ -4,6 +4,7 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { spawn } = require('child_process');
 const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
+const { resolveClienteFromBody } = require('./clientes');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -222,7 +223,10 @@ async function notifyOrderCompletedByWhatsapp(pedido, lineas) {
 }
 
 function validarPedido(body) {
-  if (!body.cliente_id || isNaN(Number(body.cliente_id))) return 'ID de cliente requerido';
+  const clienteIdValue = body.cliente_id != null && body.cliente_id !== '' ? Number(body.cliente_id) : null;
+  if (body.cliente_id != null && body.cliente_id !== '' && (!Number.isFinite(clienteIdValue) || clienteIdValue <= 0)) {
+    return 'ID de cliente inválido';
+  }
   if (!Array.isArray(body.productos) || body.productos.length === 0) return 'Productos requeridos';
   for (const p of body.productos) {
     if (!p.producto_id || isNaN(Number(p.producto_id))) return 'ID de producto requerido';
@@ -433,10 +437,13 @@ router.post('/', async (req, res) => {
     const { cliente_id, productos, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } =
       req.body;
 
+    const resolvedCliente = await resolveClienteFromBody(req.body);
+
     await sql`BEGIN`;
     try {
+      const clienteIdForSave = resolvedCliente && resolvedCliente.cliente_id != null ? Number(resolvedCliente.cliente_id) : null;
       const insertedPedido =
-        await sql`INSERT INTO pedidos_venta (cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto, fecha) VALUES (${cliente_id}, ${estado}, ${nombre_cliente || null}, ${telefono || null}, ${cedula || null}, ${tasa_cambio_monto || null}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas') RETURNING *`;
+        await sql`INSERT INTO pedidos_venta (cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto, fecha) VALUES (${clienteIdForSave}, ${estado}, ${resolvedCliente?.nombre_cliente || nombre_cliente || null}, ${resolvedCliente?.telefono || telefono || null}, ${resolvedCliente?.cedula || cedula || null}, ${tasa_cambio_monto || null}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas') RETURNING *`;
       const pedidoId = insertedPedido && insertedPedido[0] ? insertedPedido[0].id : null;
       if (!pedidoId) {
         await sql`ROLLBACK`;
