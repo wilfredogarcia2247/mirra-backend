@@ -691,42 +691,78 @@ router.get('/paginated', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
+    const estadoRaw = typeof req.query.estado === 'string' ? req.query.estado.trim() : '';
+    const estadoFilter = estadoRaw ? estadoRaw.toLowerCase() : '';
 
     const countStart = Date.now();
-    const countResult = await sql`SELECT COUNT(*) FROM pedidos_venta`;
+    const countResult = estadoFilter
+      ? await sql`SELECT COUNT(*) FROM pedidos_venta WHERE LOWER(COALESCE(estado, '')) = ${estadoFilter}`
+      : await sql`SELECT COUNT(*) FROM pedidos_venta`;
     logQueryTime('pedidosVenta.paginated.count', countStart);
     const total = parseInt(countResult[0].count);
 
     const pageStart = Date.now();
-    const rows = await sql`
-      WITH selected AS (
-        SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
-      )
-      SELECT
-        s.*,
-        pv.id AS pv_id,
-        pv.pedido_venta_id,
-        pv.producto_id,
-        pv.cantidad,
-        pv.formula_id,
-        COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
-        COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-        COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-        COALESCE(pv.costo_unitario, prod.costo) AS costo,
-        pv.orden_produccion_id,
-        COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
-        prod.image_url,
-        (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
-      FROM selected s
-      LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
-      LEFT JOIN productos prod ON prod.id = pv.producto_id
-      LEFT JOIN formulas f ON f.id = pv.formula_id
-      LEFT JOIN (
-        SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
-        FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
-      ) op ON op.producto_terminado_id = prod.id
-      ORDER BY s.id DESC, pv.id ASC
-    `;
+    const rows = estadoFilter
+      ? await sql`
+          WITH selected AS (
+            SELECT * FROM pedidos_venta
+            WHERE LOWER(COALESCE(estado, '')) = ${estadoFilter}
+            ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
+          )
+          SELECT
+            s.*,
+            pv.id AS pv_id,
+            pv.pedido_venta_id,
+            pv.producto_id,
+            pv.cantidad,
+            pv.formula_id,
+            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+            COALESCE(pv.costo_unitario, prod.costo) AS costo,
+            pv.orden_produccion_id,
+            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+            prod.image_url,
+            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+          FROM selected s
+          LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
+          LEFT JOIN productos prod ON prod.id = pv.producto_id
+          LEFT JOIN formulas f ON f.id = pv.formula_id
+          LEFT JOIN (
+            SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+            FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+          ) op ON op.producto_terminado_id = prod.id
+          ORDER BY s.id DESC, pv.id ASC
+        `
+      : await sql`
+          WITH selected AS (
+            SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
+          )
+          SELECT
+            s.*,
+            pv.id AS pv_id,
+            pv.pedido_venta_id,
+            pv.producto_id,
+            pv.cantidad,
+            pv.formula_id,
+            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+            COALESCE(pv.costo_unitario, prod.costo) AS costo,
+            pv.orden_produccion_id,
+            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+            prod.image_url,
+            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+          FROM selected s
+          LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
+          LEFT JOIN productos prod ON prod.id = pv.producto_id
+          LEFT JOIN formulas f ON f.id = pv.formula_id
+          LEFT JOIN (
+            SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+            FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+          ) op ON op.producto_terminado_id = prod.id
+          ORDER BY s.id DESC, pv.id ASC
+        `;
     logQueryTime(
       'pedidosVenta.paginated.data',
       pageStart,
