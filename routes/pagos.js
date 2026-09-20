@@ -49,7 +49,10 @@ router.get('/', async (req, res) => {
 
 router.get('/resumen-metodo-moneda', async (req, res) => {
   try {
-    const rows = await sql`
+    const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+    const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+
+    const baseSelect = sql`
       SELECT
         COALESCE(f.nombre, 'Metodo no definido') AS metodo,
         COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA') AS moneda,
@@ -58,9 +61,18 @@ router.get('/resumen-metodo-moneda', async (req, res) => {
       FROM pagos p
       LEFT JOIN formas_pago f ON f.id = p.forma_pago_id
       LEFT JOIN bancos b ON b.id = p.banco_id
-      GROUP BY COALESCE(f.nombre, 'Metodo no definido'), COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA')
-      ORDER BY COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC, COALESCE(f.nombre, 'Metodo no definido') ASC
     `;
+
+    let rows;
+    if (fechaInicio && fechaFin) {
+      rows = await sql` ${baseSelect} WHERE DATE(COALESCE(p.fecha_transaccion, p.fecha)) >= DATE(${fechaInicio}) AND DATE(COALESCE(p.fecha_transaccion, p.fecha)) <= DATE(${fechaFin}) GROUP BY COALESCE(f.nombre, 'Metodo no definido'), COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA') ORDER BY COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC, COALESCE(f.nombre, 'Metodo no definido') ASC`;
+    } else if (fechaInicio) {
+      rows = await sql` ${baseSelect} WHERE DATE(COALESCE(p.fecha_transaccion, p.fecha)) >= DATE(${fechaInicio}) GROUP BY COALESCE(f.nombre, 'Metodo no definido'), COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA') ORDER BY COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC, COALESCE(f.nombre, 'Metodo no definido') ASC`;
+    } else if (fechaFin) {
+      rows = await sql` ${baseSelect} WHERE DATE(COALESCE(p.fecha_transaccion, p.fecha)) <= DATE(${fechaFin}) GROUP BY COALESCE(f.nombre, 'Metodo no definido'), COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA') ORDER BY COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC, COALESCE(f.nombre, 'Metodo no definido') ASC`;
+    } else {
+      rows = await sql` ${baseSelect} GROUP BY COALESCE(f.nombre, 'Metodo no definido'), COALESCE(NULLIF(TRIM(p.tasa_simbolo), ''), NULLIF(TRIM(b.moneda), ''), 'SIN_MONEDA') ORDER BY COALESCE(SUM(COALESCE(p.monto, 0)), 0) DESC, COALESCE(f.nombre, 'Metodo no definido') ASC`;
+    }
 
     const byMethod = {};
     for (const row of rows || []) {
