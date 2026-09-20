@@ -814,6 +814,8 @@ router.get('/paginated', async (req, res) => {
 // Endpoint optimizado para reportes (evita N+1 y payload innecesario)
 router.get('/reportes-resumen', async (req, res) => {
   try {
+    const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+    const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
     const qStart = Date.now();
     const rows = await sql`
       SELECT
@@ -830,6 +832,8 @@ router.get('/reportes-resumen', async (req, res) => {
       FROM pedidos_venta pv
       LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
       LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
+        AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
       ORDER BY pv.id DESC
     `;
     logQueryTime('pedidosVenta.reportesResumen', qStart, `rows=${rows?.length || 0}`);
@@ -873,6 +877,8 @@ router.get('/reportes-resumen', async (req, res) => {
 
 router.get('/reportes-presentaciones', async (req, res) => {
   try {
+    const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+    const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
     const estadosVendidos = [
       'completado',
       'completada',
@@ -895,6 +901,8 @@ router.get('/reportes-presentaciones', async (req, res) => {
         INNER JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
         LEFT JOIN productos prod ON prod.id = pvp.producto_id
         WHERE LOWER(COALESCE(pv.estado, '')) = ANY(${estadosVendidos})
+          AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
+          AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
       ),
       normalizados AS (
         SELECT
@@ -968,6 +976,8 @@ router.get('/reportes-presentaciones', async (req, res) => {
 
 router.get('/clientes-top-resumen', async (req, res) => {
   try {
+    const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+    const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
     const limitRaw = Number(req.query.limit || 10);
     const pedidosLimitRaw = Number(req.query.pedidos_limit || 5);
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 10;
@@ -990,6 +1000,8 @@ router.get('/clientes-top-resumen', async (req, res) => {
         LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
         LEFT JOIN productos prod ON prod.id = pvp.producto_id
         WHERE LOWER(COALESCE(pv.estado, '')) IN ('completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado')
+          AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
+          AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
         GROUP BY pv.id, pv.fecha, pv.estado, cliente_nombre, cliente_key
       ),
       top_clientes AS (
