@@ -14,7 +14,89 @@ function validarOrden(body) {
 
 router.get('/', async (req, res) => {
   try {
-    const result = await sql`SELECT * FROM ordenes_produccion`;
+    const { producto_terminado_id, estado } = req.query;
+    let result;
+    if (producto_terminado_id && !isNaN(Number(producto_terminado_id))) {
+      if (estado) {
+        result = await sql`SELECT * FROM ordenes_produccion WHERE producto_terminado_id = ${Number(producto_terminado_id)} AND estado = ${estado} ORDER BY fecha DESC`;
+      } else {
+        result = await sql`SELECT * FROM ordenes_produccion WHERE producto_terminado_id = ${Number(producto_terminado_id)} ORDER BY fecha DESC`;
+      }
+    } else if (estado) {
+      result = await sql`SELECT * FROM ordenes_produccion WHERE estado = ${estado} ORDER BY fecha DESC`;
+    } else {
+      result = await sql`SELECT * FROM ordenes_produccion ORDER BY fecha DESC`;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/ordenes-produccion/resumen-por-producto
+// Devuelve cuántas veces se produjo (agregó esencia) para cada producto terminado.
+// Filtra solo órdenes Completadas. Responde: [{ producto_terminado_id, producto_nombre, veces_producido, cantidad_total_producida, ultima_produccion }]
+router.get('/resumen-por-producto', async (req, res) => {
+  try {
+    const { desde, hasta } = req.query;
+    let result;
+    if (desde && hasta) {
+      result = await sql`
+        SELECT
+          o.producto_terminado_id,
+          p.nombre AS producto_nombre,
+          COUNT(*) AS veces_producido,
+          SUM(o.cantidad) AS cantidad_total_producida,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        LEFT JOIN productos p ON p.id = o.producto_terminado_id
+        WHERE o.estado = 'Completada' AND o.fecha >= ${desde} AND o.fecha <= ${hasta}
+        GROUP BY o.producto_terminado_id, p.nombre
+        ORDER BY veces_producido DESC
+      `;
+    } else if (desde) {
+      result = await sql`
+        SELECT
+          o.producto_terminado_id,
+          p.nombre AS producto_nombre,
+          COUNT(*) AS veces_producido,
+          SUM(o.cantidad) AS cantidad_total_producida,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        LEFT JOIN productos p ON p.id = o.producto_terminado_id
+        WHERE o.estado = 'Completada' AND o.fecha >= ${desde}
+        GROUP BY o.producto_terminado_id, p.nombre
+        ORDER BY veces_producido DESC
+      `;
+    } else if (hasta) {
+      result = await sql`
+        SELECT
+          o.producto_terminado_id,
+          p.nombre AS producto_nombre,
+          COUNT(*) AS veces_producido,
+          SUM(o.cantidad) AS cantidad_total_producida,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        LEFT JOIN productos p ON p.id = o.producto_terminado_id
+        WHERE o.estado = 'Completada' AND o.fecha <= ${hasta}
+        GROUP BY o.producto_terminado_id, p.nombre
+        ORDER BY veces_producido DESC
+      `;
+    } else {
+      result = await sql`
+        SELECT
+          o.producto_terminado_id,
+          p.nombre AS producto_nombre,
+          COUNT(*) AS veces_producido,
+          SUM(o.cantidad) AS cantidad_total_producida,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        LEFT JOIN productos p ON p.id = o.producto_terminado_id
+        WHERE o.estado = 'Completada'
+        GROUP BY o.producto_terminado_id, p.nombre
+        ORDER BY veces_producido DESC
+      `;
+    }
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

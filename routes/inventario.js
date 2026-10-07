@@ -87,6 +87,60 @@ router.post('/ajustar', async (req, res) => {
   }
 });
 
+// GET /api/inventario/movimientos
+// Lista el historial de movimientos de inventario (kardex).
+// Filtros opcionales: ?producto_id=X, ?tipo=entrada|salida, ?limit=N (default 200)
+router.get('/movimientos', async (req, res) => {
+  try {
+    const { producto_id, tipo, limit } = req.query;
+    const maxRows = Math.min(Number(limit) || 200, 1000);
+    let result;
+    if (producto_id && !isNaN(Number(producto_id)) && tipo) {
+      result = await sql`
+        SELECT m.*, p.nombre AS producto_nombre, a.nombre AS almacen_nombre
+        FROM inventario_movimientos m
+        LEFT JOIN productos p ON p.id = m.producto_id
+        LEFT JOIN almacenes a ON a.id = m.almacen_id
+        WHERE m.producto_id = ${Number(producto_id)} AND m.tipo = ${tipo}
+        ORDER BY m.id DESC
+        LIMIT ${maxRows}
+      `;
+    } else if (producto_id && !isNaN(Number(producto_id))) {
+      result = await sql`
+        SELECT m.*, p.nombre AS producto_nombre, a.nombre AS almacen_nombre
+        FROM inventario_movimientos m
+        LEFT JOIN productos p ON p.id = m.producto_id
+        LEFT JOIN almacenes a ON a.id = m.almacen_id
+        WHERE m.producto_id = ${Number(producto_id)}
+        ORDER BY m.id DESC
+        LIMIT ${maxRows}
+      `;
+    } else if (tipo) {
+      result = await sql`
+        SELECT m.*, p.nombre AS producto_nombre, a.nombre AS almacen_nombre
+        FROM inventario_movimientos m
+        LEFT JOIN productos p ON p.id = m.producto_id
+        LEFT JOIN almacenes a ON a.id = m.almacen_id
+        WHERE m.tipo = ${tipo}
+        ORDER BY m.id DESC
+        LIMIT ${maxRows}
+      `;
+    } else {
+      result = await sql`
+        SELECT m.*, p.nombre AS producto_nombre, a.nombre AS almacen_nombre
+        FROM inventario_movimientos m
+        LEFT JOIN productos p ON p.id = m.producto_id
+        LEFT JOIN almacenes a ON a.id = m.almacen_id
+        ORDER BY m.id DESC
+        LIMIT ${maxRows}
+      `;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const result =
