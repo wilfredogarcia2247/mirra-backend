@@ -105,6 +105,7 @@ app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
 
 // Endpoint público para obtener la tasa de cambio activa
 app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
+app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
 // Rutas protegidas
@@ -123,6 +124,7 @@ app.use('/api/pagos', authMiddleware, require('./routes/pagos'));
 app.use('/api/precios', authMiddleware, require('./routes/precios'));
 // Tasas de cambio
 app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
+app.use('/api/cintillo', authMiddleware, require('./routes/cintilloMensajes'));
 // Categorias
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 // Marcas
