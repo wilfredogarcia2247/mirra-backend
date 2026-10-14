@@ -95,7 +95,7 @@ router.get('/', async (req, res) => {
     if (productIds.length > 0) {
       formulasRows = await sql`
         SELECT id, producto_terminado_id AS producto_id, nombre AS formula_nombre, costo, precio_venta
-        FROM formulas WHERE producto_terminado_id = ANY(${productIds}) ORDER BY producto_terminado_id, nombre
+        FROM formulas WHERE producto_terminado_id = ANY(${productIds}) AND activo = TRUE ORDER BY producto_terminado_id, nombre
       `;
     }
     // Agrupar 'formulas' (presentaciones) por producto usando las filas de `formulas`

@@ -158,6 +158,42 @@ router.get('/by-like', async (req, res) => {
   }
 });
 
+// PATCH /api/formulas/by-like/set-active
+// Body: { "q": "30ml", "activo": true|false }
+router.patch('/by-like/set-active', async (req, res) => {
+  const q = (req.body?.q || '').toString().trim();
+  const activo = req.body?.activo;
+
+  if (!q) return res.status(400).json({ error: 'q requerido' });
+  if (activo == null || typeof activo !== 'boolean') {
+    return res.status(400).json({ error: 'activo requerido y debe ser boolean' });
+  }
+
+  try {
+    await sql`BEGIN`;
+
+    const updated = await sql`
+      UPDATE formulas
+      SET activo = ${activo}
+      WHERE nombre ILIKE ${'%' + q + '%'}
+      RETURNING id, producto_terminado_id, nombre, activo
+    `;
+
+    await sql`COMMIT`;
+
+    return res.json({
+      success: true,
+      q,
+      activo,
+      updated_count: updated.length,
+      updated,
+    });
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) { }
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // PATCH /api/formulas/by-like
 // Body: { "q": "ml", "precio_venta": 25.00 }
 router.patch('/by-like', async (req, res) => {
@@ -243,6 +279,7 @@ router.put('/:id', async (req, res) => {
     } catch (e) { }
     const { producto_terminado_id, componentes, nombre } = req.body;
     const { costo, precio_venta } = req.body;
+    const activo = req.body.activo !== undefined ? Boolean(req.body.activo) : undefined;
     await sql`BEGIN`;
     // Verificar que la fórmula exista
     const f = await sql`SELECT * FROM formulas WHERE id = ${formulaId} FOR NO KEY UPDATE`;
@@ -250,8 +287,12 @@ router.put('/:id', async (req, res) => {
       await sql`ROLLBACK`;
       return res.status(404).json({ error: 'Fórmula no encontrada' });
     }
-    // Actualizar producto_terminado_id
-    await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, costo = ${costo}, precio_venta = ${precio_venta} WHERE id = ${formulaId}`;
+    // Actualizar fórmula
+    if (activo !== undefined) {
+      await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, costo = ${costo}, precio_venta = ${precio_venta}, activo = ${activo} WHERE id = ${formulaId}`;
+    } else {
+      await sql`UPDATE formulas SET producto_terminado_id = ${producto_terminado_id}, nombre = ${nombre}, costo = ${costo}, precio_venta = ${precio_venta} WHERE id = ${formulaId}`;
+    }
     // Reemplazar componentes: eliminar existentes e insertar nuevos
     await sql`DELETE FROM formula_componentes WHERE formula_id = ${formulaId}`;
     for (const c of componentes) {

@@ -828,6 +828,7 @@ router.get('/reportes-resumen', async (req, res) => {
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.nombre_producto, prod.nombre) AS nombre_producto,
+        pvp.formula_nombre,
         COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
       FROM pedidos_venta pv
       LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
@@ -863,6 +864,7 @@ router.get('/reportes-resumen', async (req, res) => {
           cantidad,
           precio_venta: precio,
           nombre_producto: row.nombre_producto,
+          formula_nombre: row.formula_nombre || null,
           subtotal,
         });
         pedido.total += subtotal;

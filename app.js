@@ -134,6 +134,8 @@ app.use('/api/images', require('./routes/imagenes'));
 app.use('/api/whatsapp', authMiddleware, whatsappRoutes);
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
+app.use('/api/dashboard', authMiddleware, require('./routes/dashboard'));
+
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
 });

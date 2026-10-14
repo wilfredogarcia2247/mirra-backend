@@ -103,6 +103,84 @@ router.get('/resumen-por-producto', async (req, res) => {
   }
 });
 
+// GET /api/ordenes-produccion/resumen-por-materia
+// Devuelve cuántos gramos de cada materia prima (esencia) se usaron en producciones completadas.
+// Responde: [{ materia_prima_id, materia_nombre, veces_producido, cantidad_total_gramos, ultima_produccion }]
+router.get('/resumen-por-materia', async (req, res) => {
+  try {
+    const { desde, hasta } = req.query;
+    let result;
+    if (desde && hasta) {
+      result = await sql`
+        SELECT
+          fc.materia_prima_id,
+          COALESCE(prod.nombre, ing.nombre) AS materia_nombre,
+          COUNT(DISTINCT o.id) AS veces_producido,
+          SUM(fc.cantidad * o.cantidad) AS cantidad_total_gramos,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        JOIN formula_componentes fc ON fc.formula_id = o.formula_id
+        LEFT JOIN productos prod ON prod.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        WHERE o.estado = 'Completada' AND o.fecha >= ${desde} AND o.fecha <= ${hasta}
+        GROUP BY fc.materia_prima_id, COALESCE(prod.nombre, ing.nombre)
+        ORDER BY cantidad_total_gramos DESC
+      `;
+    } else if (desde) {
+      result = await sql`
+        SELECT
+          fc.materia_prima_id,
+          COALESCE(prod.nombre, ing.nombre) AS materia_nombre,
+          COUNT(DISTINCT o.id) AS veces_producido,
+          SUM(fc.cantidad * o.cantidad) AS cantidad_total_gramos,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        JOIN formula_componentes fc ON fc.formula_id = o.formula_id
+        LEFT JOIN productos prod ON prod.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        WHERE o.estado = 'Completada' AND o.fecha >= ${desde}
+        GROUP BY fc.materia_prima_id, COALESCE(prod.nombre, ing.nombre)
+        ORDER BY cantidad_total_gramos DESC
+      `;
+    } else if (hasta) {
+      result = await sql`
+        SELECT
+          fc.materia_prima_id,
+          COALESCE(prod.nombre, ing.nombre) AS materia_nombre,
+          COUNT(DISTINCT o.id) AS veces_producido,
+          SUM(fc.cantidad * o.cantidad) AS cantidad_total_gramos,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        JOIN formula_componentes fc ON fc.formula_id = o.formula_id
+        LEFT JOIN productos prod ON prod.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        WHERE o.estado = 'Completada' AND o.fecha <= ${hasta}
+        GROUP BY fc.materia_prima_id, COALESCE(prod.nombre, ing.nombre)
+        ORDER BY cantidad_total_gramos DESC
+      `;
+    } else {
+      result = await sql`
+        SELECT
+          fc.materia_prima_id,
+          COALESCE(prod.nombre, ing.nombre) AS materia_nombre,
+          COUNT(DISTINCT o.id) AS veces_producido,
+          SUM(fc.cantidad * o.cantidad) AS cantidad_total_gramos,
+          MAX(o.fecha) AS ultima_produccion
+        FROM ordenes_produccion o
+        JOIN formula_componentes fc ON fc.formula_id = o.formula_id
+        LEFT JOIN productos prod ON prod.id = fc.materia_prima_id
+        LEFT JOIN ingredientes ing ON ing.id = fc.materia_prima_id
+        WHERE o.estado = 'Completada'
+        GROUP BY fc.materia_prima_id, COALESCE(prod.nombre, ing.nombre)
+        ORDER BY cantidad_total_gramos DESC
+      `;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/ordenes-produccion/detailed
 // Devuelve órdenes de producción con nombre del producto terminado y los componentes que usa
 // Soporta filtro opcional: ?pedido_id=X
