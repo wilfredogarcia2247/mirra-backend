@@ -14,6 +14,7 @@ const corsOptions = {
       'https://minio.mirraperfumeria.com',
       'http://localhost:5173',
       'http://localhost:8080',
+      'http://localhost:8081',
       'http://localhost:3000'
     ];
     // Permitir si no hay origin (como apps móviles o curl) o si está en la lista
@@ -135,6 +136,8 @@ app.use('/api/whatsapp', authMiddleware, whatsappRoutes);
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.use('/api/dashboard', authMiddleware, require('./routes/dashboard'));
+// Rastreo MRW Venezuela (público — clientes sin cuenta pueden rastrear)
+app.use('/api/mrw', require('./routes/mrw'));
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
