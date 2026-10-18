@@ -52,6 +52,7 @@ router.get('/', async (req, res) => {
           LEFT JOIN marcas m ON m.id = p.marca_id
           WHERE p.visible_en_catalogo IS NOT FALSE
           ${patternClause ? sql`AND p.nombre ILIKE ${patternClause}` : sql``}
+          ORDER BY RANDOM()
           ${lim ? sql`LIMIT ${lim}` : sql``}
         `;
       } else {
@@ -87,6 +88,7 @@ router.get('/', async (req, res) => {
         ) inv_tot ON inv_tot.producto_id = p.id
         WHERE p.id = ANY(${prodIds})
           AND COALESCE(p.visible_en_catalogo, TRUE) = TRUE
+        ORDER BY RANDOM()
       `;
     }
     // Obtener fórmulas (presentaciones) para los productos listados
@@ -148,6 +150,7 @@ router.get('/', async (req, res) => {
         unidad: p.unidad,
         stock: Number(p.stock),
         precio_venta: p.precio_venta,
+        destacado: Boolean(p.destacado),
         formulas: formulasPorProducto[p.id] || [],
         image_url: p.image_url,
         categoria,

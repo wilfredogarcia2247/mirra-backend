@@ -11,6 +11,7 @@ describe('Catálogo público de productos', () => {
       if (res.body.length > 0) {
         // el catálogo ahora incluye image_url por producto (puede ser null)
         expect(res.body[0]).toHaveProperty('image_url');
+        expect(typeof res.body[0].destacado).toBe('boolean');
       }
     }
   });

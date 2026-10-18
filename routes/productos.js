@@ -15,6 +15,8 @@ function validarProducto(body) {
     return 'image_url debe ser string';
   if (body.visible_en_catalogo != null && typeof body.visible_en_catalogo !== 'boolean')
     return 'visible_en_catalogo debe ser boolean';
+  if (body.destacado != null && typeof body.destacado !== 'boolean')
+    return 'destacado debe ser boolean';
   return null;
 }
 
@@ -87,7 +89,7 @@ router.post('/', async (req, res) => {
   const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo } =
+    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo, destacado } =
       payloadPost;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
@@ -100,9 +102,9 @@ router.post('/', async (req, res) => {
       if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
     }
     const result = await sql`
-      INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo)
+      INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo, destacado)
       VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${image_url || null
-      }, ${categoria_id || null}, ${marca_id || null}, ${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true})
+      }, ${categoria_id || null}, ${marca_id || null}, ${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}, ${destacado !== undefined ? Boolean(destacado) : false})
       RETURNING *
     `;
     res.status(201).json(result[0]);
@@ -171,7 +173,7 @@ router.put('/:id', async (req, res) => {
   try {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo } =
+    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo, destacado } =
       payloadPut;
     // Validar existencia de categoria y marca si vienen presentes
     if (categoria_id != null) {
@@ -186,7 +188,7 @@ router.put('/:id', async (req, res) => {
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}, visible_en_catalogo=${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}
+      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}, visible_en_catalogo=${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}, destacado=COALESCE(${destacado ?? null}, destacado)
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
