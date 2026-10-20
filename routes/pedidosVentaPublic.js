@@ -4,6 +4,12 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
+const {
+  normalizeCodigo,
+  validarCupon,
+  calcularDescuento,
+  registrarUsoCupon,
+} = require('../services/cupones');
 
 function formatOrderWhatsappNotificationPayload(pedido) {
   return {
@@ -12,6 +18,8 @@ function formatOrderWhatsappNotificationPayload(pedido) {
     telefono: pedido.telefono,
     total: pedido.total,
     tasa_cambio_monto: pedido.tasa_cambio_monto,
+    cupon_codigo: pedido.cupon_codigo,
+    descuento_cupon: pedido.descuento_cupon,
     items: Array.isArray(pedido.productos)
       ? pedido.productos.map((p) => ({
         name: p.producto_nombre,
@@ -64,6 +72,9 @@ function validarPedido(body) {
     (isNaN(Number(body.tasa_cambio_monto)) || Number(body.tasa_cambio_monto) <= 0)
   )
     return 'tasa_cambio_monto inválida';
+  // El cupón es opcional; si viene debe ser un código no vacío
+  if (body.cupon_codigo != null && body.cupon_codigo !== '' && !normalizeCodigo(body.cupon_codigo))
+    return 'cupon_codigo inválido';
   return null;
 }
 
@@ -95,6 +106,16 @@ router.post('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
     } catch (e) { }
+    // Columnas de cupón en pedidos_venta (por si la migración no se ejecutó en este entorno)
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS cupon_id INTEGER;`;
+    } catch (e) { }
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS cupon_codigo TEXT;`;
+    } catch (e) { }
+    try {
+      await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS descuento_cupon NUMERIC(12, 2) NOT NULL DEFAULT 0;`;
+    } catch (e) { }
     // Note: no legacy tamano columns required here.
     const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Compatibilidad: aceptar `productos` o `lineas`
@@ -103,6 +124,18 @@ router.post('/', async (req, res) => {
       : Array.isArray(req.body.lineas)
         ? req.body.lineas
         : [];
+
+    // Validar el cupón en el servidor: el cliente nunca decide el monto del descuento
+    const cuponCodigo = normalizeCodigo(req.body.cupon_codigo);
+    let cuponAplicado = null;
+    if (cuponCodigo) {
+      const resultadoCupon = await validarCupon(cuponCodigo);
+      if (!resultadoCupon.ok) {
+        // 400: el cupón viene en el cuerpo de la petición y no se pudo aplicar
+        return res.status(400).json({ error: resultadoCupon.error, cupon_invalido: true });
+      }
+      cuponAplicado = resultadoCupon.cupon;
+    }
 
     const resolvedCliente = await resolveClienteFromBody(req.body);
     const clienteIdValue =
@@ -162,6 +195,33 @@ router.post('/', async (req, res) => {
         // insertar la línea (guardando formula_id/formula_nombre si se proporcionó)
         await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave}, ${null}, ${false})`;
       }
+
+      // Calcular el total bruto de las líneas ya guardadas (mismo criterio que el detalle final)
+      const totalRow = await sql`
+        SELECT COALESCE(SUM(pv.cantidad * COALESCE(pv.precio_venta, prod.precio_venta, 0)), 0) AS total
+        FROM pedido_venta_productos pv
+        LEFT JOIN productos prod ON prod.id = pv.producto_id
+        WHERE pv.pedido_venta_id = ${pedido[0].id}
+      `;
+      const totalBase = totalRow && totalRow[0] ? Number(totalRow[0].total) || 0 : 0;
+
+      // Aplicar el cupón: descuento calculado en el servidor y registrado en el canje
+      let descuentoCupon = 0;
+      if (cuponAplicado) {
+        descuentoCupon = calcularDescuento(totalBase, cuponAplicado.descuento_porcentaje);
+        const uso = await registrarUsoCupon(cuponAplicado, pedido[0].id, descuentoCupon, clienteIdValue);
+        if (!uso.ok) {
+          await sql`ROLLBACK`;
+          return res.status(400).json({ error: uso.error, cupon_invalido: true });
+        }
+        await sql`
+          UPDATE pedidos_venta
+          SET cupon_id = ${cuponAplicado.id},
+              cupon_codigo = ${cuponAplicado.codigo},
+              descuento_cupon = ${descuentoCupon}
+          WHERE id = ${pedido[0].id}
+        `;
+      }
       await sql`COMMIT`;
 
       const productosDetalle = await sql`
@@ -204,11 +264,18 @@ router.post('/', async (req, res) => {
           subtotal,
         };
       });
+      // El total devuelto es el neto: ya incluye el descuento del cupón aplicado
+      const totalFinal = Math.max(0, Number((total - descuentoCupon).toFixed(2)));
       // No incluir componentes en la respuesta pública: el front usará `formula_id` para crear la orden de producción
       const pedidoObj = {
         ...pedido[0],
         productos: productosMapeados,
-        total,
+        total: totalFinal,
+        total_base: Number(total.toFixed(2)),
+        descuento_cupon: Number(descuentoCupon.toFixed(2)),
+        cupon_id: cuponAplicado ? cuponAplicado.id : (pedido[0].cupon_id ?? null),
+        cupon_codigo: cuponAplicado ? cuponAplicado.codigo : (pedido[0].cupon_codigo ?? null),
+        cupon_descuento_porcentaje: cuponAplicado ? cuponAplicado.descuento_porcentaje : null,
         // Compatibilidad cliente: antiguamente se devolvía `produccionesCreadas`.
         // Aquí no creamos producciones al momento de crear el pedido, así que devolvemos arreglo vacío.
         produccionesCreadas: [],

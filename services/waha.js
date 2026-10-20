@@ -114,6 +114,13 @@ function formatOrderNotificationMessage(order) {
   lines.push(`📝 *Pedido:* #${orderId}`);
   lines.push(`👤 *Cliente:* ${customerName}`);
   lines.push(`💳 *Cedula:* ${cedula}`);
+
+  const cuponCodigo = order.cupon_codigo;
+  const descuentoCupon = Number(order.descuento_cupon || 0);
+  if (cuponCodigo && descuentoCupon > 0) {
+    lines.push(`🎟️ *Cupon:* ${cuponCodigo} (-${formatTotalBs(descuentoCupon, order.tasa_cambio_monto)})`);
+  }
+
   lines.push(`💰 *Total a pagar:* ${formatTotalBs(order.total, order.tasa_cambio_monto)}`);
 
   if (Array.isArray(order.items) && order.items.length > 0) {

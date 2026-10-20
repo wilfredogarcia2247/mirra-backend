@@ -146,6 +146,57 @@ async function fetchAjustesMapByPedidoIds(ids) {
   return map;
 }
 
+// El descuento del cupón aplicado en el checkout público se descuenta del total del pedido
+function applyCuponToBreakdown(pedido, breakdown) {
+  const descuentoCupon = roundCurrency(pedido.descuento_cupon || 0);
+  if (descuentoCupon <= 0) return breakdown;
+  return {
+    ...breakdown,
+    total_descuentos: roundCurrency(breakdown.total_descuentos + descuentoCupon),
+    total_final: Math.max(0, roundCurrency(breakdown.total_final - descuentoCupon)),
+  };
+}
+
+/**
+ * Enriquece los pedidos con los datos del cupón aplicado (código, porcentaje,
+ * descripción y colaborador) en una sola consulta, sin N+1.
+ */
+async function attachCuponesToPedidos(pedidos) {
+  if (!Array.isArray(pedidos) || pedidos.length === 0) return pedidos;
+  const ids = Array.from(
+    new Set(
+      pedidos
+        .map((p) => Number(p?.cupon_id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )
+  );
+  if (ids.length === 0) return pedidos;
+
+  try {
+    const rows = await sql`
+      SELECT c.id, c.codigo, c.descuento_porcentaje, c.descripcion, c.activo,
+             col.nombre AS colaborador_nombre
+      FROM cupones c
+      LEFT JOIN colaboradores col ON col.id = c.colaborador_id
+      WHERE c.id = ANY(${ids})
+    `;
+    const map = new Map((rows || []).map((r) => [Number(r.id), r]));
+    for (const pedido of pedidos) {
+      const cupon = map.get(Number(pedido.cupon_id));
+      if (!cupon) continue;
+      pedido.cupon_codigo = pedido.cupon_codigo || cupon.codigo;
+      pedido.cupon_descuento_porcentaje = Number(cupon.descuento_porcentaje);
+      pedido.cupon_descripcion = cupon.descripcion || null;
+      pedido.cupon_colaborador_nombre = cupon.colaborador_nombre || null;
+      pedido.cupon_activo = Boolean(cupon.activo);
+    }
+  } catch (error) {
+    // La tabla de cupones puede no existir en entornos sin la migración aplicada
+    console.warn('Error cargando datos de cupones de los pedidos:', error.message || error);
+  }
+  return pedidos;
+}
+
 async function attachAjustesToPedidos(pedidos) {
   if (!Array.isArray(pedidos) || pedidos.length === 0) return pedidos;
   const ids = Array.from(
@@ -159,7 +210,7 @@ async function attachAjustesToPedidos(pedidos) {
     for (const pedido of pedidos) {
       pedido.ajustes = [];
       const base = roundCurrency(pedido.total_base ?? pedido.total ?? 0);
-      const breakdown = computeAjustesBreakdown(base, []);
+      const breakdown = applyCuponToBreakdown(pedido, computeAjustesBreakdown(base, []));
       pedido.total_base = breakdown.total_base;
       pedido.total_descuentos = breakdown.total_descuentos;
       pedido.total_recargos = breakdown.total_recargos;
@@ -172,7 +223,7 @@ async function attachAjustesToPedidos(pedidos) {
   for (const pedido of pedidos) {
     const base = roundCurrency(pedido.total_base ?? pedido.total ?? 0);
     const ajustes = ajustesMap.get(Number(pedido.id)) || [];
-    const breakdown = computeAjustesBreakdown(base, ajustes);
+    const breakdown = applyCuponToBreakdown(pedido, computeAjustesBreakdown(base, ajustes));
     pedido.ajustes = breakdown.ajustes;
     pedido.total_base = breakdown.total_base;
     pedido.total_descuentos = breakdown.total_descuentos;
@@ -424,6 +475,7 @@ router.get('/', async (req, res) => {
 
     const pedidos = Array.from(map.values());
     await attachAjustesToPedidos(pedidos);
+    await attachCuponesToPedidos(pedidos);
     res.json(pedidos);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -542,8 +594,8 @@ router.post('/', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const stats = await sql`
-      SELECT estado, COUNT(*)::int as count 
-      FROM pedidos_venta 
+      SELECT estado, COUNT(*)::int as count
+      FROM pedidos_venta
       GROUP BY estado
     `;
 
@@ -553,7 +605,9 @@ router.get('/stats', async (req, res) => {
       Enviado: 0,
       Completado: 0,
       Cancelado: 0,
-      Total: 0
+      Total: 0,
+      CuponesAplicados: 0,
+      DescuentoCuponTotal: 0
     };
 
     let total = 0;
@@ -565,8 +619,60 @@ router.get('/stats', async (req, res) => {
     });
     result.Total = total;
 
+    // Totales de descuentos aplicados por cupón
+    try {
+      const cupones = await sql`
+        SELECT
+          COUNT(*) FILTER (WHERE cupon_codigo IS NOT NULL)::int AS pedidos,
+          COALESCE(SUM(descuento_cupon), 0)::numeric AS descuento
+        FROM pedidos_venta
+      `;
+      if (cupones && cupones[0]) {
+        result.CuponesAplicados = Number(cupones[0].pedidos || 0);
+        result.DescuentoCuponTotal = Number(cupones[0].descuento || 0);
+      }
+    } catch (error) {
+      console.warn('Error calculando estadísticas de cupones:', error.message || error);
+    }
+
     res.json(result);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Resumen de descuentos por cupón: cuántos pedidos lo usaron y cuánto se descontó
+router.get('/cupones-resumen', async (req, res) => {
+  try {
+    const rows = await sql`
+      SELECT
+        pv.cupon_id,
+        COALESCE(pv.cupon_codigo, c.codigo) AS codigo,
+        c.descuento_porcentaje,
+        col.nombre AS colaborador_nombre,
+        COUNT(*)::int AS pedidos,
+        COALESCE(SUM(pv.descuento_cupon), 0)::numeric AS descuento_total,
+        MAX(pv.fecha) AS ultimo_uso
+      FROM pedidos_venta pv
+      LEFT JOIN cupones c ON c.id = pv.cupon_id
+      LEFT JOIN colaboradores col ON col.id = c.colaborador_id
+      WHERE pv.cupon_codigo IS NOT NULL OR pv.cupon_id IS NOT NULL
+      GROUP BY pv.cupon_id, COALESCE(pv.cupon_codigo, c.codigo), c.descuento_porcentaje, col.nombre
+      ORDER BY descuento_total DESC, codigo ASC
+    `;
+    return res.json(
+      (rows || []).map((r) => ({
+        cupon_id: r.cupon_id != null ? Number(r.cupon_id) : null,
+        codigo: r.codigo,
+        descuento_porcentaje: r.descuento_porcentaje != null ? Number(r.descuento_porcentaje) : null,
+        colaborador_nombre: r.colaborador_nombre || null,
+        pedidos: Number(r.pedidos || 0),
+        descuento_total: Number(r.descuento_total || 0),
+        ultimo_uso: r.ultimo_uso || null,
+      }))
+    );
+  } catch (err) {
+    console.error('Error en resumen de cupones:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -668,6 +774,7 @@ router.get('/buscar', async (req, res) => {
     }
 
     await attachAjustesToPedidos(pedidosConDetalle);
+    await attachCuponesToPedidos(pedidosConDetalle);
 
     // Si solo hay un resultado y es búsqueda por ID, devolver directamente el objeto
     if (isNumericSearch && pedidosConDetalle.length === 1) {
@@ -693,76 +800,53 @@ router.get('/paginated', async (req, res) => {
     const offset = (page - 1) * limit;
     const estadoRaw = typeof req.query.estado === 'string' ? req.query.estado.trim() : '';
     const estadoFilter = estadoRaw ? estadoRaw.toLowerCase() : '';
+    const conCuponRaw = typeof req.query.con_cupon === 'string' ? req.query.con_cupon.trim().toLowerCase() : '';
+    const conCupon = conCuponRaw === 'true' || conCuponRaw === '1' || conCuponRaw === 'si';
+
+    // Condiciones compuestas: solo se agregan las que aplican
+    const filtroEstado = estadoFilter ? sql`AND LOWER(COALESCE(estado, '')) = ${estadoFilter}` : sql``;
+    const filtroCupon = conCupon ? sql`AND cupon_codigo IS NOT NULL` : sql``;
 
     const countStart = Date.now();
-    const countResult = estadoFilter
-      ? await sql`SELECT COUNT(*) FROM pedidos_venta WHERE LOWER(COALESCE(estado, '')) = ${estadoFilter}`
-      : await sql`SELECT COUNT(*) FROM pedidos_venta`;
+    const countResult = await sql`
+      SELECT COUNT(*) FROM pedidos_venta
+      WHERE TRUE ${filtroEstado} ${filtroCupon}
+    `;
     logQueryTime('pedidosVenta.paginated.count', countStart);
     const total = parseInt(countResult[0].count);
 
     const pageStart = Date.now();
-    const rows = estadoFilter
-      ? await sql`
-          WITH selected AS (
-            SELECT * FROM pedidos_venta
-            WHERE LOWER(COALESCE(estado, '')) = ${estadoFilter}
-            ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
-          )
-          SELECT
-            s.*,
-            pv.id AS pv_id,
-            pv.pedido_venta_id,
-            pv.producto_id,
-            pv.cantidad,
-            pv.formula_id,
-            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
-            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-            COALESCE(pv.costo_unitario, prod.costo) AS costo,
-            pv.orden_produccion_id,
-            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
-            prod.image_url,
-            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
-          FROM selected s
-          LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
-          LEFT JOIN productos prod ON prod.id = pv.producto_id
-          LEFT JOIN formulas f ON f.id = pv.formula_id
-          LEFT JOIN (
-            SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
-            FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
-          ) op ON op.producto_terminado_id = prod.id
-          ORDER BY s.id DESC, pv.id ASC
-        `
-      : await sql`
-          WITH selected AS (
-            SELECT * FROM pedidos_venta ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
-          )
-          SELECT
-            s.*,
-            pv.id AS pv_id,
-            pv.pedido_venta_id,
-            pv.producto_id,
-            pv.cantidad,
-            pv.formula_id,
-            COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
-            COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
-            COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
-            COALESCE(pv.costo_unitario, prod.costo) AS costo,
-            pv.orden_produccion_id,
-            COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
-            prod.image_url,
-            (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
-          FROM selected s
-          LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
-          LEFT JOIN productos prod ON prod.id = pv.producto_id
-          LEFT JOIN formulas f ON f.id = pv.formula_id
-          LEFT JOIN (
-            SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
-            FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
-          ) op ON op.producto_terminado_id = prod.id
-          ORDER BY s.id DESC, pv.id ASC
-        `;
+    const rows = await sql`
+      WITH selected AS (
+        SELECT * FROM pedidos_venta
+        WHERE TRUE ${filtroEstado} ${filtroCupon}
+        ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}
+      )
+      SELECT
+        s.*,
+        pv.id AS pv_id,
+        pv.pedido_venta_id,
+        pv.producto_id,
+        pv.cantidad,
+        pv.formula_id,
+        COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
+        COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
+        COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
+        COALESCE(pv.costo_unitario, prod.costo) AS costo,
+        pv.orden_produccion_id,
+        COALESCE(pv.produccion_creada, FALSE) AS produccion_creada,
+        prod.image_url,
+        (COALESCE(op.produced_total,0) >= pv.cantidad) AS produccion_completada
+      FROM selected s
+      LEFT JOIN pedido_venta_productos pv ON pv.pedido_venta_id = s.id
+      LEFT JOIN productos prod ON prod.id = pv.producto_id
+      LEFT JOIN formulas f ON f.id = pv.formula_id
+      LEFT JOIN (
+        SELECT producto_terminado_id, COALESCE(SUM(cantidad),0) AS produced_total
+        FROM ordenes_produccion WHERE estado = 'Completada' GROUP BY producto_terminado_id
+      ) op ON op.producto_terminado_id = prod.id
+      ORDER BY s.id DESC, pv.id ASC
+    `;
     logQueryTime(
       'pedidosVenta.paginated.data',
       pageStart,
@@ -799,6 +883,7 @@ router.get('/paginated', async (req, res) => {
 
     const pedidosConDetalle = Array.from(map.values());
     await attachAjustesToPedidos(pedidosConDetalle);
+    await attachCuponesToPedidos(pedidosConDetalle);
     res.json({
       data: pedidosConDetalle,
       total,
@@ -825,6 +910,8 @@ router.get('/reportes-resumen', async (req, res) => {
         pv.nombre_cliente,
         pv.telefono,
         pv.cedula,
+        pv.cupon_codigo,
+        COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.nombre_producto, prod.nombre) AS nombre_producto,
@@ -849,6 +936,8 @@ router.get('/reportes-resumen', async (req, res) => {
           nombre_cliente: row.nombre_cliente,
           telefono: row.telefono,
           cedula: row.cedula,
+          cupon_codigo: row.cupon_codigo || null,
+          descuento_cupon: Number(row.descuento_cupon || 0),
           productos: [],
           total: 0,
         });
@@ -869,6 +958,30 @@ router.get('/reportes-resumen', async (req, res) => {
         });
         pedido.total += subtotal;
       }
+    }
+
+    // El descuento del cupón se reparte proporcionalmente entre las líneas para que
+    // los reportes (ventas, productos, clientes) reflejen lo que el cliente pagó.
+    for (const pedido of byPedidoId.values()) {
+      const bruto = pedido.total;
+      const descuento = Number(pedido.descuento_cupon || 0);
+      if (descuento <= 0 || bruto <= 0) {
+        pedido.total_bruto = roundCurrency(bruto);
+        continue;
+      }
+      const factor = (bruto - descuento) / bruto;
+      let asignado = 0;
+      const lineas = pedido.productos;
+      lineas.forEach((linea, index) => {
+        const neto = index === lineas.length - 1
+          ? roundCurrency(bruto - descuento - asignado)
+          : roundCurrency(linea.subtotal * factor);
+        asignado += neto;
+        linea.subtotal_original = roundCurrency(linea.subtotal);
+        linea.subtotal = neto;
+      });
+      pedido.total_bruto = roundCurrency(bruto);
+      pedido.total = roundCurrency(bruto - descuento);
     }
 
     res.json(Array.from(byPedidoId.values()));
@@ -1135,6 +1248,7 @@ router.get('/:id', async (req, res) => {
     // No incluir componentes: el front recibirá `formula_id` y `formula_nombre` para crear la orden de producción
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
     await attachAjustesToPedidos([pedidoObj]);
+    await attachCuponesToPedidos([pedidoObj]);
     res.json(pedidoObj);
   } catch (err) {
     res.status(500).json({ error: err.message });

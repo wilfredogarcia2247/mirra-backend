@@ -100,6 +100,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 // Permitir creación pública de pedidos de venta sin token (POST)
 // Montamos antes de las rutas protegidas para que solo el POST quede público
 app.use('/api/pedidos-venta', require('./routes/pedidosVentaPublic'));
+app.use('/api/cupones', require('./routes/cuponesPublic'));
 
 // Catálogo público de productos (no requiere token)
 app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
@@ -121,6 +122,7 @@ app.use('/api/pedidos-venta', authMiddleware, require('./routes/pedidosVenta'));
 app.use('/api/bancos', authMiddleware, require('./routes/bancos'));
 app.use('/api/formas-pago', authMiddleware, require('./routes/formasPago'));
 app.use('/api/pagos', authMiddleware, require('./routes/pagos'));
+app.use('/api/cupones', authMiddleware, require('./routes/cupones'));
 // Precios calculados por el motor de reglas
 app.use('/api/precios', authMiddleware, require('./routes/precios'));
 // Tasas de cambio

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "seed": "node initNeonDB.js",
+    "migrate:cupones": "node scripts/create_cupones_tables.js",
     "test": "jest",
     "format": "prettier --write .",
     "dev": "nodemon server.js"

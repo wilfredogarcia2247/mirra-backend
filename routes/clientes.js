@@ -188,16 +188,28 @@ router.get('/resumen', async (req, res) => {
     try {
         const limit = Number(req.query.limit || 10);
         const rows = await sql`
+      WITH ordenes AS (
+        SELECT pv.id,
+               pv.cliente_id,
+               COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, 0)), 0)::numeric AS bruto,
+               COALESCE(pv.descuento_cupon, 0)::numeric AS descuento
+        FROM pedidos_venta pv
+        LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+        GROUP BY pv.id, pv.cliente_id, pv.descuento_cupon
+      )
       SELECT c.id,
              c.nombre,
              c.cedula,
              c.telefono,
-             COUNT(DISTINCT pv.id)::int AS total_pedidos,
-             COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, 0)), 0)::numeric AS total_gastado,
-             MAX(pv.fecha) AS ultima_compra
+             COUNT(DISTINCT o.id)::int AS total_pedidos,
+             COALESCE(SUM(o.bruto - o.descuento), 0)::numeric AS total_gastado,
+             COALESCE(SUM(o.descuento), 0)::numeric AS total_descuentos,
+             MAX(pv_fecha) AS ultima_compra
       FROM clientes c
-      LEFT JOIN pedidos_venta pv ON pv.cliente_id = c.id
-      LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+      LEFT JOIN ordenes o ON o.cliente_id = c.id
+      LEFT JOIN LATERAL (
+        SELECT MAX(pv2.fecha) AS pv_fecha FROM pedidos_venta pv2 WHERE pv2.cliente_id = c.id
+      ) ult ON TRUE
       GROUP BY c.id, c.nombre, c.cedula, c.telefono
       ORDER BY total_pedidos DESC, total_gastado DESC, c.nombre ASC
       LIMIT ${Number.isFinite(limit) && limit > 0 ? limit : 10}
