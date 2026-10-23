@@ -23,6 +23,9 @@ function mapCupon(row) {
     uso_actual: Number(row.uso_actual || 0),
     uso_maximo: row.uso_maximo == null ? null : Number(row.uso_maximo),
     colaborador_nombre: row.colaborador_nombre || null,
+    colaborador_id: row.colaborador_id == null ? null : Number(row.colaborador_id),
+    colaborador_tipo: row.colaborador_tipo || null,
+    porcentaje_comision: Number(row.porcentaje_comision || 0),
   };
 }
 
@@ -102,8 +105,10 @@ async function validarCupon(codigo) {
 
   try {
     const rows = await sql`
-      SELECT c.id, c.codigo, c.descuento_porcentaje, c.descripcion, c.es_global,
-             c.uso_actual, c.uso_maximo, col.nombre AS colaborador_nombre
+            SELECT c.id, c.codigo, c.descuento_porcentaje, c.descripcion, c.es_global,
+              c.uso_actual, c.uso_maximo, col.nombre AS colaborador_nombre,
+              col.id AS colaborador_id, col.tipo AS colaborador_tipo,
+              col.porcentaje_comision
       FROM cupones c
       LEFT JOIN colaboradores col ON col.id = c.colaborador_id
       WHERE UPPER(c.codigo) = ${cod}
@@ -139,7 +144,7 @@ function calcularDescuento(totalBase, descuentoPorcentaje) {
  * cuando dos pedidos validan el mismo cupón a la vez.
  * Devuelve { ok: true } o { ok: false, error }.
  */
-async function registrarUsoCupon(cupon, pedidoVentaId, descuentoAplicado, clienteId) {
+async function registrarUsoCupon(cupon, pedidoVentaId, descuentoAplicado, clienteId, comision = {}) {
   const cuponId = Number(cupon?.id);
   const pedidoId = Number(pedidoVentaId);
   if (!Number.isInteger(cuponId) || cuponId < 1) {
@@ -167,16 +172,25 @@ async function registrarUsoCupon(cupon, pedidoVentaId, descuentoAplicado, client
 
     try {
       await sql`
-        INSERT INTO cupon_usos (cupon_id, pedido_venta_id, descuento_aplicado, cliente_id, usado_en)
+        INSERT INTO cupon_usos (
+          cupon_id, pedido_venta_id, descuento_aplicado, cliente_id,
+          base_comisionable, porcentaje_comision, comision_monto, usado_en
+        )
         VALUES (
           ${cuponId},
           ${pedidoId},
           ${roundCurrency(descuentoAplicado)},
           ${clienteId == null ? null : Number(clienteId)},
+          ${roundCurrency(comision.base_comisionable)},
+          ${Number(comision.porcentaje_comision) || 0},
+          ${roundCurrency(comision.comision_monto)},
           NOW()
         )
-        ON CONFLICT (cupon_id, pedido_venta_id) DO UPDATE
-          SET descuento_aplicado = EXCLUDED.descuento_aplicado
+        ON CONFLICT (cupon_id, pedido_venta_id) DO UPDATE SET
+          descuento_aplicado = EXCLUDED.descuento_aplicado,
+          base_comisionable = EXCLUDED.base_comisionable,
+          porcentaje_comision = EXCLUDED.porcentaje_comision,
+          comision_monto = EXCLUDED.comision_monto
       `;
     } catch (insertError) {
       // Se compensa el consumo para no dejar el cupón con usos gastados sin canje

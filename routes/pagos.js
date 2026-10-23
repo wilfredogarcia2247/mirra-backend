@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 
 function validarPago(body) {
   if (!body.pedido_venta_id || isNaN(Number(body.pedido_venta_id)))
@@ -161,6 +162,7 @@ router.post('/', async (req, res) => {
       }, ${req.body.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${
         tasaSimbolo || null
       }) RETURNING *`;
+    await snapshotPaidOrderCommission(pedido_venta_id, sql);
     res.status(201).json(result[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });

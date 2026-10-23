@@ -110,6 +110,13 @@ app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
+app.use('/api', authMiddleware, (req, res, next) => {
+  if (req.user?.rol === 'influencer' && !(req.method === 'GET' && req.path === '/cupones/influencer/dashboard')) {
+    return res.status(403).json({ error: 'Tu usuario solo tiene acceso al panel de influencer' });
+  }
+  return next();
+});
+
 // Rutas protegidas
 app.use('/api/productos', authMiddleware, require('./routes/productos'));
 app.use('/api/almacenes', authMiddleware, require('./routes/almacenes'));

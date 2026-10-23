@@ -10,6 +10,10 @@ const {
   calcularDescuento,
   registrarUsoCupon,
 } = require('../services/cupones');
+const {
+  calculateCommission,
+  calculateCommissionableBase,
+} = require('../services/influencerCommissions');
 
 function formatOrderWhatsappNotificationPayload(pedido) {
   return {
@@ -209,7 +213,23 @@ router.post('/', async (req, res) => {
       let descuentoCupon = 0;
       if (cuponAplicado) {
         descuentoCupon = calcularDescuento(totalBase, cuponAplicado.descuento_porcentaje);
-        const uso = await registrarUsoCupon(cuponAplicado, pedido[0].id, descuentoCupon, clienteIdValue);
+        const esInfluencer = cuponAplicado.colaborador_tipo === 'influencer';
+        const baseComisionable = esInfluencer
+          ? calculateCommissionableBase(Math.max(0, totalBase - descuentoCupon), 0)
+          : 0;
+        const porcentajeComision = esInfluencer ? cuponAplicado.porcentaje_comision : 0;
+        const comisionMonto = calculateCommission(baseComisionable, porcentajeComision);
+        const uso = await registrarUsoCupon(
+          cuponAplicado,
+          pedido[0].id,
+          descuentoCupon,
+          clienteIdValue,
+          {
+            base_comisionable: baseComisionable,
+            porcentaje_comision: porcentajeComision,
+            comision_monto: comisionMonto,
+          }
+        );
         if (!uso.ok) {
           await sql`ROLLBACK`;
           return res.status(400).json({ error: uso.error, cupon_invalido: true });
