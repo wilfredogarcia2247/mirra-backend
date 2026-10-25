@@ -115,6 +115,9 @@ const sql = neon(process.env.DATABASE_URL);
     `;
     await sql`ALTER TABLE influencer_comision_pagos ADD COLUMN IF NOT EXISTS fecha_corte DATE`;
     await sql`ALTER TABLE influencer_comision_pagos ADD COLUMN IF NOT EXISTS comprobante_url TEXT`;
+    // El comprobante se guarda como key del archivo (S3/MinIO), no como URL firmada:
+    // una URL firmada vence, la key no. La URL se reconstruye al leerla.
+    await sql`ALTER TABLE influencer_comision_pagos ADD COLUMN IF NOT EXISTS comprobante_key TEXT`;
     await sql`UPDATE influencer_comision_pagos SET fecha_corte = COALESCE(fecha_pago, NOW())::date WHERE fecha_corte IS NULL`;
     await sql`ALTER TABLE influencer_comision_pagos ALTER COLUMN fecha_corte SET NOT NULL`;
     await sql`CREATE INDEX IF NOT EXISTS idx_influencer_comision_pagos_colaborador ON influencer_comision_pagos(colaborador_id, fecha_pago DESC)`;

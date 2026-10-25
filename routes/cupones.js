@@ -5,6 +5,7 @@ const {
   maskPersonalNumber,
   summarizeCouponHistory,
 } = require('../services/influencerCommissions');
+const { resolveImageUrl } = require('./imagenes');
 const sql = neon(process.env.DATABASE_URL);
 
 const TIPOS_COLABORADOR = new Set(['trabajador', 'influencer', 'colaborador']);
@@ -144,9 +145,9 @@ router.get('/colaboradores/:id/comisiones-pagos', async (req, res) => {
   if (!Number.isInteger(colaboradorId) || colaboradorId < 1) return res.status(400).json({ error: 'ID inválido' });
   if (!isValidDateOnly(fechaCorte)) return res.status(400).json({ error: 'Fecha de corte inválida' });
   try {
-    const [payments, generatedRows, paidRows] = await Promise.all([
+    const [paymentsRaw, generatedRows, paidRows] = await Promise.all([
       sql`
-        SELECT id, monto, fecha_corte, fecha_pago, referencia, comprobante_url, observaciones, creado_en
+        SELECT id, monto, fecha_corte, fecha_pago, referencia, comprobante_url, comprobante_key, observaciones, creado_en
         FROM influencer_comision_pagos
         WHERE colaborador_id = ${colaboradorId}
         ORDER BY fecha_corte DESC, fecha_pago DESC, id DESC
@@ -169,7 +170,13 @@ router.get('/colaboradores/:id/comisiones-pagos', async (req, res) => {
     ]);
     const generado = Number(generatedRows[0]?.total || 0);
     const pagado = Number(paidRows[0]?.total || 0);
-    return res.json({ pagos: payments || [], resumen: { fecha_corte: fechaCorte, generado, pagado, disponible: Math.max(0, Number((generado - pagado).toFixed(2))) } });
+    const payments = await Promise.all((paymentsRaw || []).map(async (payment) => ({
+      ...payment,
+      comprobante_url: payment.comprobante_key
+        ? await resolveImageUrl(payment.comprobante_key)
+        : payment.comprobante_url,
+    })));
+    return res.json({ pagos: payments, resumen: { fecha_corte: fechaCorte, generado, pagado, disponible: Math.max(0, Number((generado - pagado).toFixed(2))) } });
   } catch (error) {
     console.error('Error consultando pagos al influencer:', error.message || error);
     return res.status(500).json({ error: 'Error consultando pagos al influencer' });
@@ -180,19 +187,13 @@ router.post('/colaboradores/:id/comisiones-pagos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const colaboradorId = Number(req.params.id);
   const referencia = String(req.body?.referencia || '').trim();
-  const comprobanteUrl = String(req.body?.comprobante_url || '').trim();
+  const comprobanteKey = String(req.body?.comprobante_key || '').trim();
   const observaciones = String(req.body?.observaciones || '').trim() || null;
   const fechaCorte = String(req.body?.fecha_corte || '');
   if (!Number.isInteger(colaboradorId) || colaboradorId < 1) return res.status(400).json({ error: 'ID inválido' });
   if (!isValidDateOnly(fechaCorte)) return res.status(400).json({ error: 'Fecha de corte inválida' });
   if (!referencia) return res.status(400).json({ error: 'La referencia del pago es obligatoria' });
-  if (!comprobanteUrl) return res.status(400).json({ error: 'El comprobante de pago es obligatorio' });
-  try {
-    const receipt = new URL(comprobanteUrl);
-    if (!['http:', 'https:'].includes(receipt.protocol)) throw new Error('Protocolo inválido');
-  } catch (error) {
-    return res.status(400).json({ error: 'URL de comprobante inválida' });
-  }
+  if (!comprobanteKey) return res.status(400).json({ error: 'El comprobante de pago es obligatorio' });
 
   try {
     await sql`BEGIN`;
@@ -236,12 +237,14 @@ router.post('/colaboradores/:id/comisiones-pagos', async (req, res) => {
         return res.status(400).json({ error: 'No hay comisiones pendientes hasta esa fecha de corte' });
       }
       const inserted = await sql`
-        INSERT INTO influencer_comision_pagos (colaborador_id, monto, fecha_corte, fecha_pago, referencia, comprobante_url, observaciones, usuario_admin_id)
-        VALUES (${colaboradorId}, ${outstanding}, ${fechaCorte}::date, NOW(), ${referencia}, ${comprobanteUrl}, ${observaciones}, ${Number(req.user?.id) || null})
+        INSERT INTO influencer_comision_pagos (colaborador_id, monto, fecha_corte, fecha_pago, referencia, comprobante_key, observaciones, usuario_admin_id)
+        VALUES (${colaboradorId}, ${outstanding}, ${fechaCorte}::date, NOW(), ${referencia}, ${comprobanteKey}, ${observaciones}, ${Number(req.user?.id) || null})
         RETURNING *
       `;
       await sql`COMMIT`;
-      return res.status(201).json(inserted[0]);
+      const payment = inserted[0];
+      payment.comprobante_url = await resolveImageUrl(payment.comprobante_key);
+      return res.status(201).json(payment);
     } catch (transactionError) {
       try { await sql`ROLLBACK`; } catch (rollbackError) { }
       throw transactionError;
@@ -496,7 +499,7 @@ async function influencerDashboard(req, res) {
       `,
       sql`SELECT COALESCE(SUM(monto), 0)::numeric AS total FROM influencer_comision_pagos WHERE colaborador_id = ${colaborador.id}`,
       sql`
-        SELECT id, monto, fecha_corte, fecha_pago, referencia, comprobante_url
+        SELECT id, monto, fecha_corte, fecha_pago, referencia, comprobante_url, comprobante_key
         FROM influencer_comision_pagos
         WHERE colaborador_id = ${colaborador.id}
         ORDER BY fecha_pago DESC, id DESC
@@ -523,6 +526,12 @@ async function influencerDashboard(req, res) {
     });
     const comisionGenerada = Number(usos.reduce((sum, order) => sum + order.comision_monto, 0).toFixed(2));
     const comisionPagada = Number(payoutRows[0]?.total || 0);
+    const pagos = await Promise.all((paymentHistoryRows || []).map(async (payment) => ({
+      ...payment,
+      comprobante_url: payment.comprobante_key
+        ? await resolveImageUrl(payment.comprobante_key)
+        : payment.comprobante_url,
+    })));
     return res.json({
       colaborador: {
         nombre: colaborador.nombre,
@@ -537,7 +546,7 @@ async function influencerDashboard(req, res) {
         comision_pagada: comisionPagada,
         saldo_pendiente: Math.max(0, Number((comisionGenerada - comisionPagada).toFixed(2))),
       },
-      pagos: paymentHistoryRows || [],
+      pagos,
       cupones: summarizeCouponHistory(cuponRows, usos),
       usos,
     });
