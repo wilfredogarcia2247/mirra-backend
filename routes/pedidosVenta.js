@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
+const { buildDailySalesClose } = require('../services/dailySalesClose');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -22,6 +23,7 @@ function logQueryTime(name, startMs, extra) {
 const AJUSTE_TIPOS = new Set(['descuento', 'recargo']);
 const AJUSTE_MODOS = new Set(['porcentaje', 'monto']);
 let ajustesTableEnsured = false;
+let fechaCompletadoColumnEnsured = false;
 
 async function ensurePedidoAjustesTable() {
   if (ajustesTableEnsured) return;
@@ -38,6 +40,13 @@ async function ensurePedidoAjustesTable() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_pedido_venta_ajustes_pedido ON pedido_venta_ajustes (pedido_venta_id)`;
   ajustesTableEnsured = true;
+}
+
+async function ensureFechaCompletadoColumn() {
+  if (fechaCompletadoColumnEnsured) return;
+  await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS completado_en TIMESTAMP WITHOUT TIME ZONE`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_venta_completado_en ON pedidos_venta (completado_en)`;
+  fechaCompletadoColumnEnsured = true;
 }
 
 function roundCurrency(value) {
@@ -897,6 +906,56 @@ router.get('/paginated', async (req, res) => {
   }
 });
 
+router.get('/cierre-diario', async (req, res) => {
+  const fecha = typeof req.query.fecha === 'string' ? req.query.fecha.trim() : '';
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? new Date(`${fecha}T00:00:00.000Z`) : null;
+  if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== fecha) {
+    return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+  }
+
+  try {
+    await ensureFechaCompletadoColumn();
+    const estadosCompletados = ['completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado'];
+    const qStart = Date.now();
+    const rows = await sql`
+      SELECT
+        pv.id AS pedido_id,
+        pv.completado_en AS fecha,
+        pv.nombre_cliente,
+        pv.tasa_cambio_monto,
+        pv.cupon_codigo,
+        COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
+        pvp.producto_id,
+        pvp.cantidad,
+        COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta,
+        COALESCE(NULLIF(pvp.formula_nombre, ''), NULLIF(pvp.nombre_producto, ''), prod.nombre, '') AS presentacion_nombre
+      FROM pedidos_venta pv
+      LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE LOWER(TRIM(COALESCE(pv.estado, ''))) = ANY(${estadosCompletados})
+        AND pv.completado_en >= ${fecha}::date
+        AND pv.completado_en < ${fecha}::date + INTERVAL '1 day'
+      ORDER BY pv.id ASC
+    `;
+    logQueryTime('pedidosVenta.cierreDiario', qStart, `fecha=${fecha} rows=${rows?.length || 0}`);
+
+    const pedidoIds = Array.from(new Set((rows || []).map((row) => Number(row.pedido_id))));
+    const ajustesMap = await fetchAjustesMapByPedidoIds(pedidoIds);
+    const historyRows = await sql`
+      SELECT COUNT(*)::int AS cantidad
+      FROM pedidos_venta
+      WHERE LOWER(TRIM(COALESCE(estado, ''))) = ANY(${estadosCompletados})
+        AND completado_en IS NULL
+    `;
+    const close = buildDailySalesClose(rows, ajustesMap, fecha);
+    close.pedidos_historicos_sin_fecha_completado = Number(historyRows?.[0]?.cantidad || 0);
+    return res.json(close);
+  } catch (err) {
+    console.error('Error generando cierre diario:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error generando el cierre diario' });
+  }
+});
+
 // Endpoint optimizado para reportes (evita N+1 y payload innecesario)
 router.get('/reportes-resumen', async (req, res) => {
   try {
@@ -1282,6 +1341,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
   if (ajustesSanitizados !== null) {
     await ensurePedidoAjustesTable();
   }
+  await ensureFechaCompletadoColumn();
 
   let baseTotal = 0;
   const movimientos = [];
@@ -1439,7 +1499,12 @@ async function completarPedidoTransaccional(pedidoId, options) {
       }
     }
 
-    await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
+    await sql`
+      UPDATE pedidos_venta
+      SET estado = 'Completado',
+          completado_en = CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas'
+      WHERE id = ${pedidoId}
+    `;
 
     if (pagoObj) {
       try {

@@ -14,6 +14,8 @@ const {
   calculateCommission,
   calculateCommissionableBase,
 } = require('../services/influencerCommissions');
+const { normalizeOrderFulfillment } = require('../services/orderFulfillment');
+const { ensureSucursalesTable, sql: branchSql } = require('../services/sucursales');
 
 function formatOrderWhatsappNotificationPayload(pedido) {
   return {
@@ -55,6 +57,14 @@ function validarPedido(body) {
   // Para pedidos públicos `cliente_id` es opcional (puede venir null/0).
   if (body.cliente_id != null && body.cliente_id !== '' && isNaN(Number(body.cliente_id)))
     return 'ID de cliente inválido';
+  if (body.entrega != null) {
+    if (!String(body.nombre_cliente || '').trim()) return 'nombre_cliente requerido';
+    if (!String(body.telefono || '').trim()) return 'telefono requerido';
+    if (!String(body.cedula || '').trim()) return 'cedula requerida';
+    if (!/^\d{11,}$/.test(String(body.telefono).trim())) {
+      return 'teléfono debe contener al menos 11 dígitos numéricos';
+    }
+  }
   // Aceptamos compatiblemente `productos` o `lineas` como nombre del array enviado desde el front
   const productosArray = Array.isArray(body.productos)
     ? body.productos
@@ -79,6 +89,10 @@ function validarPedido(body) {
   // El cupón es opcional; si viene debe ser un código no vacío
   if (body.cupon_codigo != null && body.cupon_codigo !== '' && !normalizeCodigo(body.cupon_codigo))
     return 'cupon_codigo inválido';
+  if (body.entrega != null) {
+    const fulfillment = normalizeOrderFulfillment(body.entrega);
+    if (fulfillment.error) return fulfillment.error;
+  }
   return null;
 }
 
@@ -120,6 +134,8 @@ router.post('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS descuento_cupon NUMERIC(12, 2) NOT NULL DEFAULT 0;`;
     } catch (e) { }
+    await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS tipo_entrega TEXT;`;
+    await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS datos_entrega JSONB NOT NULL DEFAULT '{}'::jsonb;`;
     // Note: no legacy tamano columns required here.
     const { cliente_id, estado, nombre_cliente, telefono, cedula, tasa_cambio_monto } = req.body;
     // Compatibilidad: aceptar `productos` o `lineas`
@@ -128,6 +144,25 @@ router.post('/', async (req, res) => {
       : Array.isArray(req.body.lineas)
         ? req.body.lineas
         : [];
+    const fulfillmentInput = req.body.entrega == null ? null : normalizeOrderFulfillment(req.body.entrega).value;
+    let fulfillmentDetails = fulfillmentInput;
+    if (fulfillmentInput?.tipo === 'tienda') {
+      await ensureSucursalesTable();
+      const branchRows = await branchSql`
+        SELECT id, nombre, direccion
+        FROM sucursales
+        WHERE id = ${fulfillmentInput.sucursal_id} AND activa = TRUE
+        LIMIT 1
+      `;
+      if (!branchRows.length) {
+        return res.status(400).json({ error: 'La sucursal elegida ya no está disponible' });
+      }
+      fulfillmentDetails = {
+        ...fulfillmentInput,
+        sucursal_nombre: branchRows[0].nombre,
+        sucursal_direccion: branchRows[0].direccion,
+      };
+    }
 
     // Validar el cupón en el servidor: el cliente nunca decide el monto del descuento
     const cuponCodigo = normalizeCodigo(req.body.cupon_codigo);
@@ -156,7 +191,7 @@ router.post('/', async (req, res) => {
 
       // Insertar pedido público (sin validar ni reservar stock)
       const pedido = await sql`
-        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto)
+        INSERT INTO pedidos_venta (cliente_id, nombre_cliente, telefono, cedula, estado, fecha, origen_ip, user_agent, tasa_cambio_monto, tipo_entrega, datos_entrega)
         VALUES (
           ${clienteIdValue},
           ${resolvedCliente?.nombre_cliente || nombre_cliente || null},
@@ -166,7 +201,9 @@ router.post('/', async (req, res) => {
           CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas',
           ${origenIp || null},
           ${userAgent || null},
-          ${tasaMontoVal}
+          ${tasaMontoVal},
+          ${fulfillmentDetails?.tipo || null},
+          ${JSON.stringify(fulfillmentDetails || {})}::jsonb
         ) RETURNING *
       `;
 

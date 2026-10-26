@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const {
+  buildPendingUnpaidOrderRateUpdateQuery,
+  hasPaymentsTable,
+} = require('../services/pendingOrderRateSync');
 
 // Listar todas las tasas de cambio
 router.get('/', async (req, res) => {
@@ -38,22 +42,26 @@ router.post('/', async (req, res) => {
   try {
     const activo = req.body.activo === true;
     if (activo) {
-      // Si se crea una tasa activa, desactivar otras en transacción
-      await sql`BEGIN`;
       try {
-        await sql`UPDATE tasas_cambio SET activo = FALSE WHERE activo = TRUE`;
-        const created = await sql`
+        const paymentTableExists = await hasPaymentsTable(sql);
+        const [, created, updatedOrders] = await sql.transaction((tx) => [
+          tx`UPDATE tasas_cambio SET activo = FALSE WHERE activo = TRUE`,
+          tx`
           INSERT INTO tasas_cambio (monto, simbolo, descripcion, creado_en, activo)
           VALUES (${Number(monto)}, ${simbolo.trim()}, ${
           descripcion || null
         }, NOW(), TRUE) RETURNING *
-        `;
-        await sql`COMMIT`;
-        return res.status(201).json(created[0]);
+          `,
+          buildPendingUnpaidOrderRateUpdateQuery(tx, {
+            rate: Number(monto),
+            hasPaymentTable: paymentTableExists,
+          }),
+        ]);
+        return res.status(201).json({
+          ...created[0],
+          pedidos_actualizados_tasa: updatedOrders.length,
+        });
       } catch (e) {
-        try {
-          await sql`ROLLBACK`;
-        } catch (er) {}
         // If another concurrent request created the active rate, return that existing active row
         const msg = e && e.message ? e.message : '';
         if (msg.includes('idx_tasas_cambio_activo_true') || msg.includes('unique')) {
@@ -99,29 +107,31 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: 'Símbolo inválido' });
   try {
     const activo = req.body.activo;
-    // Si se solicita activar esta tasa, desactivar otras en transacción
     if (activo === true) {
-      await sql`BEGIN`;
-      try {
-        await sql`UPDATE tasas_cambio SET activo = FALSE WHERE activo = TRUE`;
-        const updated = await sql`
+      const paymentTableExists = await hasPaymentsTable(sql);
+      const [, updated, updatedOrders] = await sql.transaction((tx) => [
+        tx`
+          UPDATE tasas_cambio
+          SET activo = FALSE
+          WHERE activo = TRUE
+            AND EXISTS (SELECT 1 FROM tasas_cambio WHERE id = ${id})
+        `,
+        tx`
           UPDATE tasas_cambio
           SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW(), activo = TRUE
           WHERE id = ${id}
           RETURNING *
-        `;
-        if (!updated || updated.length === 0) {
-          await sql`ROLLBACK`;
-          return res.status(404).json({ error: 'No encontrado' });
-        }
-        await sql`COMMIT`;
-        return res.json(updated[0]);
-      } catch (e) {
-        try {
-          await sql`ROLLBACK`;
-        } catch (er) {}
-        throw e;
-      }
+        `,
+        buildPendingUnpaidOrderRateUpdateQuery(tx, {
+          hasPaymentTable: paymentTableExists,
+          activeRateId: id,
+        }),
+      ]);
+      if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
+      return res.json({
+        ...updated[0],
+        pedidos_actualizados_tasa: updatedOrders.length,
+      });
     } else if (activo === false) {
       // Simple update que asegura activo = false
       const updated = await sql`
@@ -133,14 +143,26 @@ router.put('/:id', async (req, res) => {
       if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
       return res.json(updated[0]);
     } else {
-      // activo no proporcionado: actualización estándar
-      const updated = await sql`
-        UPDATE tasas_cambio
-        SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW()
-        WHERE id = ${id}
-        RETURNING *
-      `;
+      const paymentTableExists = await hasPaymentsTable(sql);
+      const [updated, updatedOrders] = await sql.transaction((tx) => [
+        tx`
+          UPDATE tasas_cambio
+          SET monto = COALESCE(${monto}::numeric, monto), simbolo = COALESCE(${simbolo}, simbolo), descripcion = COALESCE(${descripcion}, descripcion), actualizado_en = NOW()
+          WHERE id = ${id}
+          RETURNING *
+        `,
+        buildPendingUnpaidOrderRateUpdateQuery(tx, {
+          hasPaymentTable: paymentTableExists,
+          activeRateId: id,
+        }),
+      ]);
       if (!updated || updated.length === 0) return res.status(404).json({ error: 'No encontrado' });
+      if (updated[0].activo) {
+        return res.json({
+          ...updated[0],
+          pedidos_actualizados_tasa: updatedOrders.length,
+        });
+      }
       return res.json(updated[0]);
     }
   } catch (err) {

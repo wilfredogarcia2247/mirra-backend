@@ -4,6 +4,22 @@ Este documento describe los endpoints y flujos relevantes para que el frontend g
 
 **Base URL**: `http://<HOST>:<PORT>/api` (ej. `http://localhost:3000/api`)
 
+### Entrega de pedidos públicos
+
+El checkout puede enviar `entrega` con `tipo: "tienda"`, `"envio_nacional"` o `"delivery"`. El backend guarda `tipo_entrega` y una copia de los datos elegidos en `datos_entrega` dentro del pedido, para que el panel interno los muestre aunque la sucursal se edite o se quite después.
+
+- El checkout primero consulta `GET /api/clientes/lookup?cedula=<cédula>`. Si existe, la respuesta incluye `cliente.id`, `cliente.nombre`, `cliente.telefono` y `cliente.cedula`; el frontend precarga nombre y teléfono, que el cliente puede editar. Si no existe, puede completar esos campos manualmente.
+- Al crear el pedido se envían `cliente_id` (cuando se encontró el cliente), `nombre_cliente`, `telefono`, `cedula`, `lineas` y `entrega`. El backend también busca por cédula si no se envió `cliente_id`, vincula el pedido al registro coincidente y conserva los valores de nombre/teléfono enviados en el pedido.
+- Para pedidos con `entrega`, el teléfono debe contener al menos 11 dígitos numéricos. El frontend elimina caracteres no numéricos y usa teclado numérico en móviles; la API normaliza los números locales venezolanos a formato internacional para notificaciones.
+- Un error de conexión al consultar clientes debe responder como error HTTP, no como cliente inexistente. Si la tabla de clientes no existe, el lookup lo señala explícitamente con `table_missing: true`.
+- `GET /api/sucursales/activas` es público y devuelve las sucursales disponibles.
+- `GET/POST /api/sucursales` y `PUT/DELETE /api/sucursales/:id` requieren autenticación de administrador. Los registros pueden desactivarse para ocultarlos del checkout sin eliminarlos.
+- Tienda: `{ "tipo": "tienda", "sucursal_id": 1 }`.
+- Envío nacional: `{ "tipo": "envio_nacional", "transportista": "MRW" | "ZOOM" | "OTRA", "transportista_otro": "...", "agencia_codigo": "...", "agencia_direccion": "..." }`. La empresa de envío es obligatoria; cuando sea `OTRA`, también se exige `transportista_otro`. Se aceptan los campos `agencia_mrw_codigo` y `agencia_mrw_direccion` para compatibilidad con solicitudes antiguas.
+- Delivery: `{ "tipo": "delivery", "ubicacion_link": "https://maps.app.goo.gl/..." }` o coordenadas `ubicacion_latitud` y `ubicacion_longitud`.
+
+Las sucursales se pueden administrar desde `/admin/sucursales`. El panel de pedidos muestra la modalidad y los datos de entrega guardados con cada pedido.
+
 **Autenticación**: todos los endpoints protegidos requieren cabecera `Authorization: Bearer <TOKEN>` donde `<TOKEN>` es JWT obtenido con `POST /api/auth/login`.
 
 **Obtener token (login)**
@@ -198,7 +214,7 @@ Nota: todas las rutas están protegidas salvo que se indique lo contrario. Se as
   - cliente_id: integer
   - total: number (monto total calculado en la moneda base)
   - moneda: string (ej: "USD", "ARS")
-  - tasa_cambio_monto: number | null — snapshot de la tasa de cambio usada al crear el pedido (referencial)
+  - tasa_cambio_monto: number | null — tasa guardada en el pedido; los pedidos pendientes sin pagos pueden recibir la tasa activa más reciente
   - fecha_creacion: string (ISO 8601)
 
 - Pedido (detalle): además de los campos anteriores
@@ -258,7 +274,7 @@ console.log(data.data);
 
 Notas importantes:
 
-- En la lista se incluye `tasa_cambio_monto` en el objeto pedido si fue enviada al crear el pedido (es referencial y no recalcula totales retroactivamente).
+- En la lista se incluye `tasa_cambio_monto` en el objeto pedido si fue enviada al crear el pedido. Los pedidos `Pendiente` sin pagos registrados pueden recibir una nueva tasa activa; los pedidos con pagos o en otros estados conservan la tasa que tenían.
 - Para mostrar el precio por línea en la vista de lista suele usarse el campo `total` del pedido; para ver el desglose por línea, consultar el endpoint de detalle.
 
 2. Obtener detalle de un pedido
@@ -375,7 +391,7 @@ Reglas típicas del backend relevantes para el front:
   {
   "cliente_id": 45,
   "moneda": "USD",
-  "tasa_cambio_monto": 350.5, // opcional — snapshot referencial
+  "tasa_cambio_monto": 350.5, // opcional — tasa inicial del pedido
   "lineas": [ { "producto_id": 10, "cantidad": 2 }, ... ]
   }
 
@@ -383,7 +399,7 @@ Reglas típicas del backend relevantes para el front:
 
 Notas:
 
-- `tasa_cambio_monto` es opcional pero si se envía se guarda como snapshot en `pedidos_venta.tasa_cambio_monto`.
+- `tasa_cambio_monto` es opcional; si se envía, se guarda inicialmente en `pedidos_venta.tasa_cambio_monto`. Una actualización posterior de la tasa activa puede reemplazarla solo mientras el pedido permanezca `Pendiente` y no tenga pagos registrados.
 - En cada línea el backend guarda `precio_venta` y `nombre_producto` al crear el pedido. El frontend no debe asumir que el precio mostrado en la tarjeta del producto será el mismo después de la creación del pedido.
 
 6. Manejo de errores y estados
@@ -532,5 +548,23 @@ try {
 5. Nota para el front: fallback cuando `precio_venta` sea null
 
 En algún dataset legacy puede ocurrir que `precio_venta` en la línea del pedido sea `null`. En ese caso el frontend puede mostrar un mensaje de advertencia o usar el `precio_unitario` si la respuesta lo incluye por compatibilidad. Lo ideal es ejecutar el backfill/migración en el backend para que `precio_venta` exista en todas las líneas.
+
+## Cierre diario de ventas
+
+- Método: `GET`
+- Ruta: `/api/pedidos-venta/cierre-diario?fecha=AAAA-MM-DD`
+- Requiere autenticación.
+- Incluye pedidos completados en la fecha indicada usando `completado_en` (hora local de Caracas), no la fecha original de creación.
+- Devuelve subtotal, descuentos de cupones y ajustes, recargos, total en USD y su conversión a Bs usando la tasa guardada en cada pedido.
+- Si algún pedido no tiene tasa guardada, los totales agregados en Bs se devuelven como `null` y el frontend informa cuántos pedidos faltan.
+- Devuelve los descuentos y recargos por pedido y el total de unidades agrupado por presentación detectada (por ejemplo, `7ml`, `30ml`, `50ml` y `100ml`). Las líneas sin tamaño identificable se agrupan como `Sin presentación`.
+- La fecha de finalización se registra al completar el pedido en `pedidos_venta.completado_en`. Aplicar antes del despliegue `docs/migrations/cierre_diario_completado_en.sql`; la ruta también asegura la columna y el índice de forma idempotente.
+- Los pedidos completados antes de incorporar `completado_en` no tienen una fecha de finalización histórica confiable y no se incluyen en cierres por fecha. El endpoint informa cuántos pedidos carecen de ese dato.
+
+## Actualización de tasa para pedidos pendientes
+
+Al crear una tasa activa o actualizar/activar la tasa vigente, el backend también actualiza `pedidos_venta.tasa_cambio_monto` para pedidos cuyo estado sea `Pendiente` y que no tengan pagos registrados. El importe de los productos en USD no cambia; su equivalente en Bs se vuelve a mostrar usando la tasa nueva.
+
+Los pedidos `Enviado`, `Completado`, `Cancelado` y cualquier pedido con uno o más pagos registrados quedan excluidos. La respuesta de creación/actualización de tasa incluye `pedidos_actualizados_tasa` para informar cuántos pedidos cambiaron. Si la tabla `pagos` aún no existe, se consideran sin pagos y se actualizan los pedidos `Pendiente`.
 
 ---
