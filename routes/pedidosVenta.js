@@ -5,6 +5,7 @@ const sql = neon(process.env.DATABASE_URL);
 const { spawn } = require('child_process');
 const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
+const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -1517,6 +1518,8 @@ async function completarPedidoTransaccional(pedidoId, options) {
       }
     }
 
+    await snapshotPaidOrderCommission(pedidoId, sql);
+
     await sql`COMMIT`;
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) { }
@@ -1701,6 +1704,7 @@ router.post('/:id/pagos', async (req, res) => {
         }, ${pago.fecha_transaccion || null}, NOW(), ${tasaVal || null}, ${tasaSimbolo || null
         }) RETURNING *
       `;
+      await snapshotPaidOrderCommission(pedidoId, sql);
       await sql`COMMIT`;
       return res.status(201).json({ ok: true, pago: inserted && inserted[0] ? inserted[0] : null });
     } catch (errTx) {

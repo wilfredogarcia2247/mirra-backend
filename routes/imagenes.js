@@ -103,6 +103,21 @@ function buildPublicUrl(key) {
   return `${PUBLIC_BASE_URL.replace(/\/$/, '')}/${BUCKET}/${key}`;
 }
 
+/**
+ * Reconstruye una URL válida a partir de la key guardada en BD.
+ * Nunca debe persistirse una URL firmada: se genera "al vuelo" aquí.
+ */
+async function resolveImageUrl(key) {
+  if (!key) return null;
+  const publicUrl = buildPublicUrl(key);
+  if (publicUrl) return publicUrl;
+  return getSignedUrl(
+    s3,
+    new GetObjectCommand({ Bucket: BUCKET, Key: key }),
+    { expiresIn: SIGNED_EXPIRES }
+  );
+}
+
 /* =========================
    Route: upload image
 ========================= */
@@ -170,3 +185,4 @@ router.post('/upload', upload.single('image'), async (req, res) => {
 });
 
 module.exports = router;
+module.exports.resolveImageUrl = resolveImageUrl;
