@@ -209,11 +209,38 @@ async function registrarUsoCupon(cupon, pedidoVentaId, descuentoAplicado, client
   }
 }
 
+/**
+ * Revierte el uso de cupón de un pedido cancelado: libera el cupo consumido
+ * en `cupones.uso_actual` y elimina el registro de `cupon_usos`, siempre que
+ * el pedido no haya llegado a pagarse (la comisión ya congelada no se toca).
+ */
+async function revertirUsoCupon(pedidoVentaId) {
+  const pedidoId = Number(pedidoVentaId);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return;
+  try {
+    const usos = await sql`
+      SELECT cupon_id FROM cupon_usos
+      WHERE pedido_venta_id = ${pedidoId} AND pedido_pagado_en IS NULL
+    `;
+    for (const uso of usos || []) {
+      await sql`DELETE FROM cupon_usos WHERE cupon_id = ${uso.cupon_id} AND pedido_venta_id = ${pedidoId}`;
+      await sql`
+        UPDATE cupones
+        SET uso_actual = GREATEST(COALESCE(uso_actual, 0) - 1, 0), actualizado_en = NOW()
+        WHERE id = ${uso.cupon_id}
+      `;
+    }
+  } catch (error) {
+    console.error('Error revirtiendo uso de cupón:', error.message || error);
+  }
+}
+
 module.exports = {
   normalizeCodigo,
   roundCurrency,
   validarCupon,
   calcularDescuento,
   registrarUsoCupon,
+  revertirUsoCupon,
   ensureCuponesSchema,
 };
