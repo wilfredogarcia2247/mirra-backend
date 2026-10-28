@@ -110,6 +110,9 @@ app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
+// Rastreo MRW Venezuela (público — clientes sin cuenta pueden rastrear)
+app.use('/api/mrw', require('./routes/mrw'));
+
 app.use('/api', authMiddleware, (req, res, next) => {
   if (req.user?.rol === 'influencer' && !(req.method === 'GET' && req.path === '/cupones/influencer/dashboard')) {
     return res.status(403).json({ error: 'Tu usuario solo tiene acceso al panel de influencer' });
@@ -145,8 +148,6 @@ app.use('/api/whatsapp', authMiddleware, whatsappRoutes);
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.use('/api/dashboard', authMiddleware, require('./routes/dashboard'));
-// Rastreo MRW Venezuela (público — clientes sin cuenta pueden rastrear)
-app.use('/api/mrw', require('./routes/mrw'));
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
