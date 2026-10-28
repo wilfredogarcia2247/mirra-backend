@@ -2,12 +2,47 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const {
+  normalizeIds,
+  getCategoriasPorProducto,
+  categoriasInexistentes,
+  setCategoriasProducto,
+} = require('../services/productoCategorias');
+
+// Categorías del producto: acepta `categoria_ids` (varias, ej. Hombre y Mujer = unisex)
+// o el antiguo `categoria_id` (una sola). La primera queda como categoría principal.
+function resolverCategorias(body) {
+  if (Object.prototype.hasOwnProperty.call(body, 'categoria_ids')) {
+    const ids = normalizeIds(body.categoria_ids) || [];
+    return { enviado: true, ids, principal: ids[0] ?? null };
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'categoria_id')) {
+    const ids = body.categoria_id != null && body.categoria_id !== '' ? normalizeIds(body.categoria_id) : [];
+    return { enviado: true, ids, principal: ids[0] ?? null };
+  }
+  return { enviado: false, ids: [], principal: null };
+}
+
+async function conCategorias(productos) {
+  const lista = Array.isArray(productos) ? productos : [productos];
+  const mapa = await getCategoriasPorProducto(lista.map((p) => p.id));
+  return lista.map((p) => {
+    const categorias = mapa[Number(p.id)] || [];
+    return {
+      ...p,
+      categorias,
+      categoria_ids: categorias.map((c) => c.id),
+      categorias_nombres: categorias.map((c) => c.nombre).join(', ') || null,
+    };
+  });
+}
 
 // Validación básica
 function validarProducto(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
   // `tipo` ya no es requerido ni enviado por el cliente
   if (body.categoria_id != null && isNaN(Number(body.categoria_id))) return 'categoria_id inválido';
+  if (body.categoria_ids != null && !Array.isArray(body.categoria_ids)) return 'categoria_ids debe ser una lista';
   if (body.marca_id != null && isNaN(Number(body.marca_id))) return 'marca_id inválido';
   if (!body.unidad || typeof body.unidad !== 'string') return 'Unidad requerida';
   if (body.stock != null && isNaN(Number(body.stock))) return 'Stock debe ser numérico';
@@ -75,7 +110,7 @@ router.get('/', async (req, res) => {
         marca_nombre: p.marca_nombre || null,
       };
     });
-    res.json(productos);
+    res.json(await conCategorias(productos));
   } catch (err) {
     console.error('Error en GET /api/productos:', err);
     res.status(500).json({ error: err.message });
@@ -89,14 +124,12 @@ router.post('/', async (req, res) => {
   const error = validarProducto(payloadPost);
   if (error) return res.status(400).json({ error });
   try {
-    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo, destacado } =
+    const { nombre, unidad, stock, costo, precio_venta, image_url, marca_id, visible_en_catalogo, destacado } =
       payloadPost;
-    // Validar existencia de categoria y marca si vienen presentes
-    if (categoria_id != null) {
-      const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
-      if (!cat || cat.length === 0)
-        return res.status(400).json({ error: 'categoria_id no existe' });
-    }
+    const cats = resolverCategorias(payloadPost);
+    // Validar existencia de categorías y marca si vienen presentes
+    if ((await categoriasInexistentes(cats.ids)).length > 0)
+      return res.status(400).json({ error: 'categoria_id no existe' });
     if (marca_id != null) {
       const m = await sql`SELECT id FROM marcas WHERE id = ${marca_id}`;
       if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
@@ -104,10 +137,11 @@ router.post('/', async (req, res) => {
     const result = await sql`
       INSERT INTO productos (nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo, destacado)
       VALUES (${nombre}, ${unidad}, ${stock || 0}, ${costo || 0}, ${precio_venta || 0}, ${image_url || null
-      }, ${categoria_id || null}, ${marca_id || null}, ${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}, ${destacado !== undefined ? Boolean(destacado) : false})
+      }, ${cats.principal}, ${marca_id || null}, ${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}, ${destacado !== undefined ? Boolean(destacado) : false})
       RETURNING *
     `;
-    res.status(201).json(result[0]);
+    await setCategoriasProducto(result[0].id, cats.ids);
+    res.status(201).json((await conCategorias(result[0]))[0]);
   } catch (err) {
     console.error('Error creando producto:', err);
     res.status(500).json({ error: err.message });
@@ -159,7 +193,7 @@ router.get('/:id', async (req, res) => {
           stock_disponible: Number(i.stock_disponible),
         }))
         : [];
-    res.json({ ...p, stock: Number(p.stock), inventario });
+    res.json((await conCategorias({ ...p, stock: Number(p.stock), inventario }))[0]);
   } catch (err) {
     console.error('Error GET /api/productos/:id:', err);
     res.status(500).json({ error: err.message });
@@ -173,14 +207,12 @@ router.put('/:id', async (req, res) => {
   try {
     // Normalizar alias en español/inglés: aceptar `imagen_url` o `image_url`
     const payloadPut = { ...req.body, image_url: req.body.image_url ?? req.body.imagen_url };
-    const { nombre, unidad, stock, costo, precio_venta, image_url, categoria_id, marca_id, visible_en_catalogo, destacado } =
+    const { nombre, unidad, stock, costo, precio_venta, image_url, marca_id, visible_en_catalogo, destacado } =
       payloadPut;
-    // Validar existencia de categoria y marca si vienen presentes
-    if (categoria_id != null) {
-      const cat = await sql`SELECT id FROM categorias WHERE id = ${categoria_id}`;
-      if (!cat || cat.length === 0)
-        return res.status(400).json({ error: 'categoria_id no existe' });
-    }
+    const cats = resolverCategorias(payloadPut);
+    // Validar existencia de categorías y marca si vienen presentes
+    if ((await categoriasInexistentes(cats.ids)).length > 0)
+      return res.status(400).json({ error: 'categoria_id no existe' });
     if (marca_id != null) {
       const m = await sql`SELECT id FROM marcas WHERE id = ${marca_id}`;
       if (!m || m.length === 0) return res.status(400).json({ error: 'marca_id no existe' });
@@ -188,11 +220,13 @@ router.put('/:id', async (req, res) => {
     // Evitar sobrescribir image_url con NULL cuando el cliente no envía ese campo.
     // COALESCE(${image_url}, image_url) usará el valor enviado o mantendrá el existente.
     const result = await sql`
-      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, image_url=COALESCE(${image_url}, image_url), categoria_id=${categoria_id}, marca_id=${marca_id}, visible_en_catalogo=${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}, destacado=COALESCE(${destacado ?? null}, destacado)
+      UPDATE productos SET nombre=${nombre}, unidad=${unidad}, stock=${stock}, costo=${costo}, precio_venta=${precio_venta}, image_url=COALESCE(${image_url}, image_url), categoria_id=CASE WHEN ${cats.enviado} THEN ${cats.principal}::int ELSE categoria_id END, marca_id=${marca_id}, visible_en_catalogo=${visible_en_catalogo !== undefined ? Boolean(visible_en_catalogo) : true}, destacado=COALESCE(${destacado ?? null}, destacado)
       WHERE id = ${req.params.id} RETURNING *
     `;
     if (result.length === 0) return res.status(404).json({ error: 'No encontrado' });
-    res.json(result[0]);
+    // Si no se enviaron categorías se mantienen las que ya tenía
+    if (cats.enviado) await setCategoriasProducto(result[0].id, cats.ids);
+    res.json((await conCategorias(result[0]))[0]);
   } catch (err) {
     console.error('Error actualizando producto:', err);
     res.status(500).json({ error: err.message });
