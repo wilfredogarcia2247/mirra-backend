@@ -241,9 +241,30 @@ router.post('/colaboradores/:id/comisiones-pagos', async (req, res) => {
         VALUES (${colaboradorId}, ${outstanding}, ${fechaCorte}::date, NOW(), ${referencia}, ${comprobanteKey}, ${observaciones}, ${Number(req.user?.id) || null})
         RETURNING *
       `;
+
+      // Al liquidar el corte, los cupones cuyas ventas entraron en este pago se
+      // desactivan: ya quedaron cobrados y no deben seguir sumando a futuras compras.
+      // El admin crea un código nuevo si el influencer sigue vendiendo.
+      const cuponesDelCorte = await sql`
+        SELECT DISTINCT c.id, c.codigo
+        FROM cupon_usos cu
+        JOIN cupones c ON c.id = cu.cupon_id
+        JOIN pedidos_venta pv ON pv.id = cu.pedido_venta_id
+        WHERE c.colaborador_id = ${colaboradorId}
+          AND c.activo = 1
+          AND cu.pedido_pagado_en IS NOT NULL
+          AND cu.pedido_pagado_en < (${fechaCorte}::date + INTERVAL '1 day')
+          AND LOWER(COALESCE(pv.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
+      `;
+      const cuponIds = (cuponesDelCorte || []).map((c) => c.id);
+      if (cuponIds.length) {
+        await sql`UPDATE cupones SET activo = 0, actualizado_en = NOW() WHERE id = ANY(${cuponIds})`;
+      }
+
       await sql`COMMIT`;
       const payment = inserted[0];
       payment.comprobante_url = await resolveImageUrl(payment.comprobante_key);
+      payment.cupones_desactivados = (cuponesDelCorte || []).map((c) => c.codigo);
       return res.status(201).json(payment);
     } catch (transactionError) {
       try { await sql`ROLLBACK`; } catch (rollbackError) { }

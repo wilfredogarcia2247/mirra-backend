@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
+const { revertirUsoCupon } = require('../services/cupones');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -2067,6 +2068,7 @@ router.put('/:id/status', async (req, res) => {
     // Cancelado u otros estados: actualizar sin efectos secundarios
     if (estado === 'Cancelado') {
       await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
+      await revertirUsoCupon(pedidoId);
       return res.json({ success: true, estado: 'Cancelado' });
     }
 
@@ -2261,6 +2263,21 @@ router.post('/:id/cancelar', async (req, res) => {
     }
 
     await sql`UPDATE pedidos_venta SET estado = 'Cancelado' WHERE id = ${pedidoId}`;
+
+    // Liberar el cupo del cupón usado por este pedido (si tenía uno y aún no se pagó)
+    const cuponUsosDelPedido = await sql`
+      SELECT cupon_id FROM cupon_usos
+      WHERE pedido_venta_id = ${pedidoId} AND pedido_pagado_en IS NULL
+    `;
+    for (const uso of cuponUsosDelPedido || []) {
+      await sql`DELETE FROM cupon_usos WHERE cupon_id = ${uso.cupon_id} AND pedido_venta_id = ${pedidoId}`;
+      await sql`
+        UPDATE cupones
+        SET uso_actual = GREATEST(COALESCE(uso_actual, 0) - 1, 0), actualizado_en = NOW()
+        WHERE id = ${uso.cupon_id}
+      `;
+    }
+
     await sql`COMMIT`;
 
     // Ejecutar recalculo global en background para asegurar consistencia en todos los productos
