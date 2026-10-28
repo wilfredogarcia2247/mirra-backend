@@ -7,7 +7,7 @@ const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha
 const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
-const { revertirUsoCupon } = require('../services/cupones');
+const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -1864,10 +1864,32 @@ router.post('/:id/items', async (req, res) => {
         nombreProducto = nombreProducto == null ? prod.nombre : nombreProducto;
       }
 
-      await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${costoUnitario || null}, ${precioUnitario || null}, ${nombreProducto || null}, ${formulaIdToSave || null}, ${formulaNombreToSave || null}, ${null}, ${false})`;
+      // Si el pedido ya tiene el mismo producto con la misma presentación (fórmula) y el
+      // mismo precio, se suma la cantidad a esa línea en vez de crear una nueva.
+      // No se suma a líneas que ya tienen orden de producción: esa orden se hizo para la
+      // cantidad anterior, así que las unidades nuevas van en su propia línea.
+      const existingLine = await sql`
+        SELECT id FROM pedido_venta_productos
+        WHERE pedido_venta_id = ${pedidoId}
+          AND producto_id = ${productoId}
+          AND formula_id IS NOT DISTINCT FROM ${formulaIdToSave || null}::int
+          AND precio_venta IS NOT DISTINCT FROM ${precioUnitario || null}::numeric
+          AND orden_produccion_id IS NULL
+          AND COALESCE(produccion_creada, FALSE) = FALSE
+        ORDER BY id ASC
+        LIMIT 1
+      `;
+      if (existingLine && existingLine[0]) {
+        await sql`UPDATE pedido_venta_productos SET cantidad = cantidad + ${cantidad} WHERE id = ${existingLine[0].id}`;
+      } else {
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${costoUnitario || null}, ${precioUnitario || null}, ${nombreProducto || null}, ${formulaIdToSave || null}, ${formulaNombreToSave || null}, ${null}, ${false})`;
+      }
     }
 
     await sql`COMMIT`;
+
+    // El cupón también aplica a los productos agregados: recalcular su descuento
+    await recalcularDescuentoCupon(pedidoId);
 
     // devolver pedido actualizado (reutilizar lógica de GET /:id)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
@@ -1905,6 +1927,7 @@ router.post('/:id/items', async (req, res) => {
     });
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
     await attachAjustesToPedidos([pedidoObj]);
+    await attachCuponesToPedidos([pedidoObj]);
     return res.status(201).json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) { }
@@ -2484,9 +2507,22 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
       return res.status(400).json({ error: 'No se puede eliminar la línea: ya existe una orden de producción asociada' });
     }
 
-    // Eliminar la línea
-    await sql`DELETE FROM pedido_venta_productos WHERE id = ${lineaId}`;
+    // ?cantidad=N quita solo N unidades de la línea; sin cantidad (o si N cubre todas) se elimina la línea
+    const cantidadActual = Number(linea.cantidad) || 0;
+    const cantidadQuitar = req.query.cantidad != null ? Number(req.query.cantidad) : cantidadActual;
+    if (!Number.isInteger(cantidadQuitar) || cantidadQuitar < 1) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'La cantidad a quitar debe ser un número entero mayor que cero' });
+    }
+    if (cantidadQuitar < cantidadActual) {
+      await sql`UPDATE pedido_venta_productos SET cantidad = cantidad - ${cantidadQuitar} WHERE id = ${lineaId}`;
+    } else {
+      await sql`DELETE FROM pedido_venta_productos WHERE id = ${lineaId}`;
+    }
     await sql`COMMIT`;
+
+    // Con menos productos, el descuento del cupón también baja
+    await recalcularDescuentoCupon(pedidoId);
 
     // Devolver pedido actualizado (reusar consulta de detalle)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
@@ -2523,6 +2559,9 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
       };
     });
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
+    // La pantalla usa esta respuesta directamente: incluir totales con ajustes y datos del cupón
+    await attachAjustesToPedidos([pedidoObj]);
+    await attachCuponesToPedidos([pedidoObj]);
     return res.json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) { }

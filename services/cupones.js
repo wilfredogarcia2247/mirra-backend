@@ -210,6 +210,55 @@ async function registrarUsoCupon(cupon, pedidoVentaId, descuentoAplicado, client
 }
 
 /**
+ * Recalcula el descuento del cupón de un pedido cuando cambian sus productos
+ * (se agrega o se quita una línea desde el panel). El descuento se vuelve a
+ * calcular con el porcentaje del cupón sobre el subtotal actual, igual que en el
+ * checkout, y también se actualiza la comisión estimada del influencer.
+ * No toca pedidos ya pagados: su comisión quedó congelada al pagarse.
+ */
+async function recalcularDescuentoCupon(pedidoVentaId) {
+  const pedidoId = Number(pedidoVentaId);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return null;
+  // Se carga aquí para evitar dependencias circulares entre servicios
+  const { calculateCommissionableBase, calculateCommission } = require('./influencerCommissions');
+
+  const rows = await sql`
+    SELECT pv.id, pv.cupon_id, c.descuento_porcentaje,
+           cu.id AS uso_id, cu.porcentaje_comision, cu.pedido_pagado_en, col.tipo AS colaborador_tipo
+    FROM pedidos_venta pv
+    JOIN cupones c ON c.id = pv.cupon_id
+    LEFT JOIN cupon_usos cu ON cu.pedido_venta_id = pv.id AND cu.cupon_id = pv.cupon_id
+    LEFT JOIN colaboradores col ON col.id = c.colaborador_id
+    WHERE pv.id = ${pedidoId}
+    LIMIT 1
+  `;
+  const info = rows && rows[0];
+  if (!info || info.pedido_pagado_en) return null;
+
+  const totalRows = await sql`
+    SELECT COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0) AS total
+    FROM pedido_venta_productos pvp
+    LEFT JOIN productos prod ON prod.id = pvp.producto_id
+    WHERE pvp.pedido_venta_id = ${pedidoId}
+  `;
+  const totalBase = Number(totalRows[0]?.total || 0);
+  const descuento = calcularDescuento(totalBase, info.descuento_porcentaje);
+
+  await sql`UPDATE pedidos_venta SET descuento_cupon = ${descuento} WHERE id = ${pedidoId}`;
+  if (info.uso_id) {
+    const esInfluencer = info.colaborador_tipo === 'influencer';
+    const base = esInfluencer ? calculateCommissionableBase(Math.max(0, totalBase - descuento), 0) : 0;
+    const comision = esInfluencer ? calculateCommission(base, info.porcentaje_comision) : 0;
+    await sql`
+      UPDATE cupon_usos
+      SET descuento_aplicado = ${descuento}, base_comisionable = ${base}, comision_monto = ${comision}
+      WHERE id = ${info.uso_id} AND pedido_pagado_en IS NULL
+    `;
+  }
+  return { descuento_cupon: descuento, total_base: roundCurrency(totalBase) };
+}
+
+/**
  * Revierte el uso de cupón de un pedido cancelado: libera el cupo consumido
  * en `cupones.uso_actual` y elimina el registro de `cupon_usos`, siempre que
  * el pedido no haya llegado a pagarse (la comisión ya congelada no se toca).
@@ -242,5 +291,6 @@ module.exports = {
   calcularDescuento,
   registrarUsoCupon,
   revertirUsoCupon,
+  recalcularDescuentoCupon,
   ensureCuponesSchema,
 };
