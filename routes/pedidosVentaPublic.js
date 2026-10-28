@@ -4,6 +4,7 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
+const { getAgotadoProductIds } = require('../services/productosAgotados');
 const {
   normalizeCodigo,
   validarCupon,
@@ -174,6 +175,16 @@ router.post('/', async (req, res) => {
         return res.status(400).json({ error: resultadoCupon.error, cupon_invalido: true });
       }
       cuponAplicado = resultadoCupon.cupon;
+    }
+
+    // No se aceptan productos agotados (sin esencia suficiente), aunque estén en el carrito
+    const agotados = await getAgotadoProductIds(productos.map((p) => p.producto_id));
+    if (agotados.size > 0) {
+      const nombres = await sql`SELECT nombre FROM productos WHERE id = ANY(${Array.from(agotados)})`;
+      return res.status(400).json({
+        error: `Producto agotado por el momento: ${(nombres || []).map((n) => n.nombre).join(', ')}. Quítalo del carrito para continuar.`,
+        productos_agotados: Array.from(agotados),
+      });
     }
 
     const resolvedCliente = await resolveClienteFromBody(req.body);

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { getAgotadoProductIds } = require('../services/productosAgotados');
 
 // GET / -> catálogo público de productos
 // Query params opcionales:
@@ -118,6 +119,9 @@ router.get('/', async (req, res) => {
       formulasPorProducto[f.producto_id].push(entry);
     });
 
+    // Productos sin esencia suficiente: se muestran con el cartel AGOTADO (no se ocultan)
+    const agotados = await getAgotadoProductIds(productIds);
+
     const enriched = (rows || []).map((p) => {
       const inventario =
         p.inventario && Array.isArray(p.inventario)
@@ -151,6 +155,7 @@ router.get('/', async (req, res) => {
         stock: Number(p.stock),
         precio_venta: p.precio_venta,
         destacado: Boolean(p.destacado),
+        agotado: agotados.has(Number(p.id)),
         formulas: formulasPorProducto[p.id] || [],
         image_url: p.image_url,
         categoria,
