@@ -1345,6 +1345,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
   await ensureFechaCompletadoColumn();
 
   let baseTotal = 0;
+  let descuentoCupon = 0;
   const movimientos = [];
   let pagoInserted = null;
 
@@ -1358,6 +1359,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
       throw e;
     }
     const pedido = pedidoRows[0];
+    descuentoCupon = pedido.descuento_cupon || 0;
     if (pedido.estado === 'Completado') {
       await sql`ROLLBACK`;
       const e = new Error('Pedido ya completado');
@@ -1592,7 +1594,8 @@ async function completarPedidoTransaccional(pedidoId, options) {
     throw err;
   }
 
-  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal }];
+  // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
+  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: descuentoCupon }];
   await attachAjustesToPedidos(resumen);
   const enriched = resumen[0];
 
@@ -1974,7 +1977,8 @@ router.put('/:id/ajustes', async (req, res) => {
 
       await sql`COMMIT`;
 
-      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal }];
+      // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
+      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: pedido.descuento_cupon || 0 }];
       await attachAjustesToPedidos(resumen);
       const enriched = resumen[0];
 
