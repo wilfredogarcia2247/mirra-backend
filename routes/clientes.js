@@ -4,12 +4,8 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
 async function clientesTableExists() {
-    try {
-        const rows = await sql`SELECT to_regclass('public.clientes') AS exists`;
-        return !!(rows && rows[0] && rows[0].exists);
-    } catch (error) {
-        return false;
-    }
+    const rows = await sql`SELECT to_regclass('public.clientes') AS exists`;
+    return !!(rows && rows[0] && rows[0].exists);
 }
 
 function normalizeCedula(value) {
@@ -41,7 +37,7 @@ async function findClienteByCedula(cedula) {
     if (!(await clientesTableExists())) return null;
 
     const rows = await sql`
-    SELECT *
+    SELECT id, nombre, telefono, cedula
     FROM clientes
     WHERE UPPER(REGEXP_REPLACE(cedula, '[^A-Z0-9]', '', 'g')) = ${cleanCedula}
     LIMIT 1

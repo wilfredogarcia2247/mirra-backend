@@ -6,6 +6,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const sql = neon(process.env.DATABASE_URL);
+const { ensurePayoutPeriodSchema } = require('../services/influencerPayoutPeriods');
 
 (async () => {
   try {
@@ -313,6 +314,9 @@ const sql = neon(process.env.DATABASE_URL);
         AND LOWER(COALESCE(calc.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
         AND calc.total_pagado_usd >= calc.total_final - 0.05
     `;
+
+    // Liquidaciones por período (desde / hasta) y vínculo comisión → liquidación
+    await ensurePayoutPeriodSchema(sql);
 
     console.log('Tablas de colaboradores y cupones creadas/verificadas.');
     process.exit(0);

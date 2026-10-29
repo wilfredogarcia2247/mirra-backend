@@ -101,6 +101,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 // Montamos antes de las rutas protegidas para que solo el POST quede público
 app.use('/api/pedidos-venta', require('./routes/pedidosVentaPublic'));
 app.use('/api/cupones', require('./routes/cuponesPublic'));
+app.use('/api/sucursales', require('./routes/sucursalesPublic'));
 
 // Catálogo público de productos (no requiere token)
 app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
@@ -123,6 +124,7 @@ app.use('/api', authMiddleware, (req, res, next) => {
 // Rutas protegidas
 app.use('/api/productos', authMiddleware, require('./routes/productos'));
 app.use('/api/almacenes', authMiddleware, require('./routes/almacenes'));
+app.use('/api/sucursales', authMiddleware, require('./routes/sucursales'));
 // Usuarios (lista) - requiere token
 app.use('/api/users', authMiddleware, require('./routes/users'));
 app.use('/api/formulas', authMiddleware, require('./routes/formulas'));

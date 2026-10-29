@@ -6,6 +6,7 @@ const {
   summarizeCouponHistory,
 } = require('../services/influencerCommissions');
 const { resolveImageUrl } = require('./imagenes');
+const { BUSINESS_TZ, ensurePayoutPeriodSchemaOnce } = require('../services/influencerPayoutPeriods');
 const sql = neon(process.env.DATABASE_URL);
 
 const TIPOS_COLABORADOR = new Set(['trabajador', 'influencer', 'colaborador']);
@@ -138,138 +139,213 @@ router.get('/usuarios-influencer', async (req, res) => {
   }
 });
 
+// Fecha de hoy en hora de Venezuela (YYYY-MM-DD).
+function todayInBusinessTz() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+function addDays(isoDate, days) {
+  const date = new Date(`${isoDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// Las comisiones se pagan como máximo hasta ayer: el día en curso aún puede recibir
+// pedidos pagados después de registrar la liquidación y quedarían fuera de ella.
+function latestPayableDate() {
+  return addDays(todayInBusinessTz(), -1);
+}
+
+function latestPayableDateMessage(maxHasta) {
+  const [year, month, day] = maxHasta.split('-');
+  return `Solo se puede pagar hasta el día anterior a hoy (${day}/${month}/${year})`;
+}
+
+// Las columnas DATE llegan como Date a medianoche UTC; se devuelven como YYYY-MM-DD.
+function toIsoDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function serializePayment(payment) {
+  return {
+    ...payment,
+    fecha_corte: toIsoDate(payment.fecha_corte),
+    fecha_desde: toIsoDate(payment.fecha_desde),
+    fecha_hasta: toIsoDate(payment.fecha_hasta),
+  };
+}
+
+async function withReceiptUrl(payment) {
+  return {
+    ...payment,
+    comprobante_url: payment.comprobante_key
+      ? await resolveImageUrl(payment.comprobante_key)
+      : payment.comprobante_url,
+  };
+}
+
+// Consulta de liquidaciones por período (desde / hasta).
+// Una comisión entra en el período según la fecha (hora de Venezuela) en que el
+// cliente terminó de pagar el pedido. Las comisiones ya liquidadas no se vuelven a contar.
 router.get('/colaboradores/:id/comisiones-pagos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const colaboradorId = Number(req.params.id);
-  const fechaCorte = req.query.fecha_corte ? String(req.query.fecha_corte) : new Date().toISOString().slice(0, 10);
   if (!Number.isInteger(colaboradorId) || colaboradorId < 1) return res.status(400).json({ error: 'ID inválido' });
-  if (!isValidDateOnly(fechaCorte)) return res.status(400).json({ error: 'Fecha de corte inválida' });
+  const fechaDesdeQuery = req.query.fecha_desde ? String(req.query.fecha_desde) : null;
+  const fechaHastaQuery = req.query.fecha_hasta ? String(req.query.fecha_hasta) : null;
+  if ((fechaDesdeQuery && !isValidDateOnly(fechaDesdeQuery)) || (fechaHastaQuery && !isValidDateOnly(fechaHastaQuery))) {
+    return res.status(400).json({ error: 'Fecha inválida' });
+  }
   try {
-    const [paymentsRaw, generatedRows, paidRows] = await Promise.all([
+    await ensurePayoutPeriodSchemaOnce();
+    const [paymentsRaw, firstUnpaidRows] = await Promise.all([
       sql`
-        SELECT id, monto, fecha_corte, fecha_pago, referencia, comprobante_url, comprobante_key, observaciones, creado_en
+        SELECT id, monto, fecha_corte, fecha_desde, fecha_hasta, fecha_pago, referencia, comprobante_url, comprobante_key, observaciones, creado_en
         FROM influencer_comision_pagos
         WHERE colaborador_id = ${colaboradorId}
-        ORDER BY fecha_corte DESC, fecha_pago DESC, id DESC
+        ORDER BY fecha_pago DESC, id DESC
       `,
       sql`
-        SELECT COALESCE(SUM(cu.comision_monto), 0)::numeric AS total
+        SELECT MIN((cu.pedido_pagado_en AT TIME ZONE ${BUSINESS_TZ})::date) AS fecha
         FROM cupon_usos cu
         JOIN cupones c ON c.id = cu.cupon_id
         JOIN pedidos_venta pv ON pv.id = cu.pedido_venta_id
         WHERE c.colaborador_id = ${colaboradorId}
           AND cu.pedido_pagado_en IS NOT NULL
-          AND cu.pedido_pagado_en < (${fechaCorte}::date + INTERVAL '1 day')
+          AND cu.comision_pago_id IS NULL
+          AND cu.comision_monto > 0
           AND LOWER(COALESCE(pv.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
       `,
-      sql`
-        SELECT COALESCE(SUM(monto), 0)::numeric AS total
-        FROM influencer_comision_pagos
-        WHERE colaborador_id = ${colaboradorId} AND fecha_corte <= ${fechaCorte}::date
-      `,
     ]);
-    const generado = Number(generatedRows[0]?.total || 0);
-    const pagado = Number(paidRows[0]?.total || 0);
-    const payments = await Promise.all((paymentsRaw || []).map(async (payment) => ({
-      ...payment,
-      comprobante_url: payment.comprobante_key
-        ? await resolveImageUrl(payment.comprobante_key)
-        : payment.comprobante_url,
-    })));
-    return res.json({ pagos: payments, resumen: { fecha_corte: fechaCorte, generado, pagado, disponible: Math.max(0, Number((generado - pagado).toFixed(2))) } });
+    const payments = await Promise.all((paymentsRaw || []).map((p) => withReceiptUrl(serializePayment(p))));
+    const ultimoPago = payments[0] || null;
+
+    // Sugerencia: desde el día siguiente al último período pagado hasta ayer.
+    // Si quedó alguna comisión sin pagar de antes, el período empieza en su fecha.
+    const maxHasta = latestPayableDate();
+    const lastPaidUntil = payments.reduce((max, p) => (p.fecha_hasta && (!max || p.fecha_hasta > max) ? p.fecha_hasta : max), null);
+    const firstUnpaid = toIsoDate(firstUnpaidRows[0]?.fecha);
+    let suggestedFrom = lastPaidUntil ? addDays(lastPaidUntil, 1) : (firstUnpaid || maxHasta);
+    if (firstUnpaid && firstUnpaid < suggestedFrom) suggestedFrom = firstUnpaid;
+    if (suggestedFrom > maxHasta) suggestedFrom = maxHasta;
+    const sugerencia = { fecha_desde: suggestedFrom, fecha_hasta: maxHasta };
+
+    const fechaDesde = fechaDesdeQuery || sugerencia.fecha_desde;
+    const fechaHasta = fechaHastaQuery || sugerencia.fecha_hasta;
+    if (fechaDesde > fechaHasta) {
+      return res.status(400).json({ error: 'La fecha "desde" no puede ser posterior a la fecha "hasta"' });
+    }
+    if (fechaHasta > maxHasta) {
+      return res.status(400).json({ error: latestPayableDateMessage(maxHasta) });
+    }
+
+    const summaryRows = await sql`
+      SELECT
+        COALESCE(SUM(t.comision_monto) FILTER (WHERE t.en_periodo), 0)::numeric AS generado,
+        COALESCE(SUM(t.comision_monto) FILTER (WHERE t.en_periodo AND t.comision_pago_id IS NOT NULL), 0)::numeric AS ya_pagado,
+        COALESCE(SUM(t.comision_monto) FILTER (WHERE t.en_periodo AND t.comision_pago_id IS NULL), 0)::numeric AS disponible,
+        COUNT(*) FILTER (WHERE t.en_periodo AND t.comision_pago_id IS NULL AND t.comision_monto > 0)::int AS pedidos_disponibles,
+        COALESCE(SUM(t.comision_monto) FILTER (WHERE NOT t.en_periodo AND t.comision_pago_id IS NULL), 0)::numeric AS pendiente_fuera_periodo
+      FROM (
+        SELECT cu.comision_monto, cu.comision_pago_id,
+          (cu.pedido_pagado_en AT TIME ZONE ${BUSINESS_TZ})::date BETWEEN ${fechaDesde}::date AND ${fechaHasta}::date AS en_periodo
+        FROM cupon_usos cu
+        JOIN cupones c ON c.id = cu.cupon_id
+        JOIN pedidos_venta pv ON pv.id = cu.pedido_venta_id
+        WHERE c.colaborador_id = ${colaboradorId}
+          AND cu.pedido_pagado_en IS NOT NULL
+          AND LOWER(COALESCE(pv.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
+      ) t
+    `;
+    const summary = summaryRows[0] || {};
+
+    // Períodos ya pagados que se cruzan con el elegido (para avisar al administrador).
+    const periodosPagados = payments
+      .filter((p) => p.fecha_hasta && p.fecha_hasta >= fechaDesde && (!p.fecha_desde || p.fecha_desde <= fechaHasta))
+      .map((p) => ({ id: p.id, fecha_desde: p.fecha_desde, fecha_hasta: p.fecha_hasta, fecha_pago: p.fecha_pago, referencia: p.referencia, monto: p.monto }))
+      .sort((a, b) => String(a.fecha_hasta).localeCompare(String(b.fecha_hasta)));
+
+    return res.json({
+      pagos: payments,
+      ultimo_pago: ultimoPago,
+      sugerencia,
+      resumen: {
+        fecha_desde: fechaDesde,
+        fecha_hasta: fechaHasta,
+        generado: Number(summary.generado || 0),
+        ya_pagado: Number(summary.ya_pagado || 0),
+        disponible: Number(Number(summary.disponible || 0).toFixed(2)),
+        pedidos_disponibles: Number(summary.pedidos_disponibles || 0),
+        pendiente_fuera_periodo: Number(Number(summary.pendiente_fuera_periodo || 0).toFixed(2)),
+        periodos_pagados: periodosPagados,
+      },
+    });
   } catch (error) {
     console.error('Error consultando pagos al influencer:', error.message || error);
     return res.status(500).json({ error: 'Error consultando pagos al influencer' });
   }
 });
 
+// Registra la liquidación de un período. Todo ocurre en una sola instrucción SQL
+// (atómica): toma las comisiones del período que aún no se han pagado, crea el pago
+// por su suma y las marca con el id del pago. Así ninguna comisión se paga dos veces.
+// No cambia el estado de los cupones.
 router.post('/colaboradores/:id/comisiones-pagos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const colaboradorId = Number(req.params.id);
   const referencia = String(req.body?.referencia || '').trim();
   const comprobanteKey = String(req.body?.comprobante_key || '').trim();
   const observaciones = String(req.body?.observaciones || '').trim() || null;
-  const fechaCorte = String(req.body?.fecha_corte || '');
+  const fechaDesde = String(req.body?.fecha_desde || '');
+  const fechaHasta = String(req.body?.fecha_hasta || '');
   if (!Number.isInteger(colaboradorId) || colaboradorId < 1) return res.status(400).json({ error: 'ID inválido' });
-  if (!isValidDateOnly(fechaCorte)) return res.status(400).json({ error: 'Fecha de corte inválida' });
+  if (!isValidDateOnly(fechaDesde) || !isValidDateOnly(fechaHasta)) return res.status(400).json({ error: 'Indica las fechas de pago "desde" y "hasta"' });
+  if (fechaDesde > fechaHasta) return res.status(400).json({ error: 'La fecha "desde" no puede ser posterior a la fecha "hasta"' });
+  if (fechaHasta > latestPayableDate()) return res.status(400).json({ error: latestPayableDateMessage(latestPayableDate()) });
   if (!referencia) return res.status(400).json({ error: 'La referencia del pago es obligatoria' });
   if (!comprobanteKey) return res.status(400).json({ error: 'El comprobante de pago es obligatorio' });
 
   try {
-    await sql`BEGIN`;
-    try {
-      const collaborator = await sql`
-        SELECT id FROM colaboradores
-        WHERE id = ${colaboradorId} AND tipo = 'influencer'
-        FOR UPDATE
-      `;
-      if (!collaborator.length) {
-        await sql`ROLLBACK`;
-        return res.status(404).json({ error: 'Influencer no encontrado' });
-      }
-      const existingCutoff = await sql`
-        SELECT id FROM influencer_comision_pagos
-        WHERE colaborador_id = ${colaboradorId} AND fecha_corte = ${fechaCorte}::date
-        LIMIT 1
-      `;
-      if (existingCutoff.length) {
-        await sql`ROLLBACK`;
-        return res.status(409).json({ error: 'Ya existe una liquidación para esta fecha de corte' });
-      }
-      const [generatedRows, paidRows] = await Promise.all([
-        sql`
-          SELECT COALESCE(SUM(cu.comision_monto), 0)::numeric AS total
-          FROM cupon_usos cu
-          JOIN cupones c ON c.id = cu.cupon_id
-          JOIN pedidos_venta pv ON pv.id = cu.pedido_venta_id
-          WHERE c.colaborador_id = ${colaboradorId}
-            AND cu.pedido_pagado_en IS NOT NULL
-            AND cu.pedido_pagado_en < (${fechaCorte}::date + INTERVAL '1 day')
-            AND LOWER(COALESCE(pv.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
-        `,
-        sql`SELECT COALESCE(SUM(monto), 0)::numeric AS total FROM influencer_comision_pagos WHERE colaborador_id = ${colaboradorId} AND fecha_corte <= ${fechaCorte}::date`,
-      ]);
-      const generated = Number(generatedRows[0]?.total || 0);
-      const alreadyPaid = Number(paidRows[0]?.total || 0);
-      const outstanding = Math.max(0, Number((generated - alreadyPaid).toFixed(2)));
-      if (outstanding <= 0) {
-        await sql`ROLLBACK`;
-        return res.status(400).json({ error: 'No hay comisiones pendientes hasta esa fecha de corte' });
-      }
-      const inserted = await sql`
-        INSERT INTO influencer_comision_pagos (colaborador_id, monto, fecha_corte, fecha_pago, referencia, comprobante_key, observaciones, usuario_admin_id)
-        VALUES (${colaboradorId}, ${outstanding}, ${fechaCorte}::date, NOW(), ${referencia}, ${comprobanteKey}, ${observaciones}, ${Number(req.user?.id) || null})
-        RETURNING *
-      `;
+    await ensurePayoutPeriodSchemaOnce();
+    const collaborator = await sql`
+      SELECT id FROM colaboradores WHERE id = ${colaboradorId} AND tipo = 'influencer' LIMIT 1
+    `;
+    if (!collaborator.length) return res.status(404).json({ error: 'Influencer no encontrado' });
 
-      // Al liquidar el corte, los cupones cuyas ventas entraron en este pago se
-      // desactivan: ya quedaron cobrados y no deben seguir sumando a futuras compras.
-      // El admin crea un código nuevo si el influencer sigue vendiendo.
-      const cuponesDelCorte = await sql`
-        SELECT DISTINCT c.id, c.codigo
+    const rows = await sql`
+      WITH elegibles AS (
+        SELECT cu.id, cu.comision_monto
         FROM cupon_usos cu
         JOIN cupones c ON c.id = cu.cupon_id
         JOIN pedidos_venta pv ON pv.id = cu.pedido_venta_id
         WHERE c.colaborador_id = ${colaboradorId}
-          AND c.activo = 1
           AND cu.pedido_pagado_en IS NOT NULL
-          AND cu.pedido_pagado_en < (${fechaCorte}::date + INTERVAL '1 day')
+          AND cu.comision_pago_id IS NULL
+          AND (cu.pedido_pagado_en AT TIME ZONE ${BUSINESS_TZ})::date BETWEEN ${fechaDesde}::date AND ${fechaHasta}::date
           AND LOWER(COALESCE(pv.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
-      `;
-      const cuponIds = (cuponesDelCorte || []).map((c) => c.id);
-      if (cuponIds.length) {
-        await sql`UPDATE cupones SET activo = 0, actualizado_en = NOW() WHERE id = ANY(${cuponIds})`;
-      }
-
-      await sql`COMMIT`;
-      const payment = inserted[0];
-      payment.comprobante_url = await resolveImageUrl(payment.comprobante_key);
-      payment.cupones_desactivados = (cuponesDelCorte || []).map((c) => c.codigo);
-      return res.status(201).json(payment);
-    } catch (transactionError) {
-      try { await sql`ROLLBACK`; } catch (rollbackError) { }
-      throw transactionError;
+        FOR UPDATE OF cu
+      ), total AS (
+        SELECT ROUND(COALESCE(SUM(comision_monto), 0), 2) AS monto FROM elegibles
+      ), pago AS (
+        INSERT INTO influencer_comision_pagos (colaborador_id, monto, fecha_corte, fecha_desde, fecha_hasta, fecha_pago, referencia, comprobante_key, observaciones, usuario_admin_id)
+        SELECT ${colaboradorId}, total.monto, ${fechaHasta}::date, ${fechaDesde}::date, ${fechaHasta}::date, NOW(), ${referencia}, ${comprobanteKey}, ${observaciones}, ${Number(req.user?.id) || null}
+        FROM total WHERE total.monto > 0
+        RETURNING *
+      ), marcados AS (
+        UPDATE cupon_usos SET comision_pago_id = pago.id
+        FROM pago
+        WHERE cupon_usos.id IN (SELECT id FROM elegibles)
+        RETURNING cupon_usos.id
+      )
+      SELECT pago.*, (SELECT COUNT(*) FROM marcados)::int AS pedidos_liquidados FROM pago
+    `;
+    if (!rows.length) {
+      return res.status(400).json({ error: 'No hay comisiones pendientes de pago en ese período' });
     }
+    const payment = await withReceiptUrl(serializePayment(rows[0]));
+    return res.status(201).json(payment);
   } catch (error) {
     console.error('Error registrando pago al influencer:', error.message || error);
     return res.status(500).json({ error: 'Error registrando pago al influencer' });
@@ -468,7 +544,8 @@ async function influencerDashboard(req, res) {
       return res.status(404).json({ error: 'No hay un perfil de influencer activo vinculado a este usuario' });
     }
     const colaborador = colaboradores[0];
-    const [cuponRows, orderRows, payoutRows, paymentHistoryRows] = await Promise.all([
+    await ensurePayoutPeriodSchemaOnce();
+    const [cuponRows, orderRows, payoutRows, paymentHistoryRows, totalGeneratedRows] = await Promise.all([
       sql`
         SELECT c.id, c.codigo, c.descuento_porcentaje, c.activo,
           c.fecha_inicio, c.fecha_fin, c.uso_actual, c.uso_maximo,
@@ -520,11 +597,22 @@ async function influencerDashboard(req, res) {
       `,
       sql`SELECT COALESCE(SUM(monto), 0)::numeric AS total FROM influencer_comision_pagos WHERE colaborador_id = ${colaborador.id}`,
       sql`
-        SELECT id, monto, fecha_corte, fecha_pago, referencia, comprobante_url, comprobante_key
+        SELECT id, monto, fecha_corte, fecha_desde, fecha_hasta, fecha_pago, referencia, comprobante_url, comprobante_key
         FROM influencer_comision_pagos
         WHERE colaborador_id = ${colaborador.id}
         ORDER BY fecha_pago DESC, id DESC
         LIMIT 50
+      `,
+      // Comisión de toda la historia (sin filtro de fechas): es la base del saldo
+      // pendiente, que siempre muestra lo que se le debe hoy al influencer.
+      sql`
+        SELECT COALESCE(SUM(cu.comision_monto), 0)::numeric AS total
+        FROM cupon_usos cu
+        JOIN cupones c ON c.id = cu.cupon_id
+        JOIN pedidos_venta pv ON pv.id = cu.pedido_venta_id
+        WHERE c.colaborador_id = ${colaborador.id}
+          AND cu.pedido_pagado_en IS NOT NULL
+          AND LOWER(COALESCE(pv.estado, '')) NOT IN ('cancelado', 'cancelada', 'anulado')
       `,
     ]);
     const usos = (orderRows || []).map((order) => {
@@ -546,13 +634,9 @@ async function influencerDashboard(req, res) {
       };
     });
     const comisionGenerada = Number(usos.reduce((sum, order) => sum + order.comision_monto, 0).toFixed(2));
+    const comisionGeneradaTotal = Number(Number(totalGeneratedRows[0]?.total || 0).toFixed(2));
     const comisionPagada = Number(payoutRows[0]?.total || 0);
-    const pagos = await Promise.all((paymentHistoryRows || []).map(async (payment) => ({
-      ...payment,
-      comprobante_url: payment.comprobante_key
-        ? await resolveImageUrl(payment.comprobante_key)
-        : payment.comprobante_url,
-    })));
+    const pagos = await Promise.all((paymentHistoryRows || []).map((payment) => withReceiptUrl(serializePayment(payment))));
     return res.json({
       colaborador: {
         nombre: colaborador.nombre,
@@ -563,9 +647,11 @@ async function influencerDashboard(req, res) {
         pedidos_cancelados: 0,
         base_comisionable: Number(usos.reduce((sum, order) => sum + order.base_comisionable, 0).toFixed(2)),
         comision_estimada: comisionGenerada,
+        // comision_generada respeta el filtro de fechas; el saldo pendiente no.
         comision_generada: comisionGenerada,
+        comision_generada_total: comisionGeneradaTotal,
         comision_pagada: comisionPagada,
-        saldo_pendiente: Math.max(0, Number((comisionGenerada - comisionPagada).toFixed(2))),
+        saldo_pendiente: Math.max(0, Number((comisionGeneradaTotal - comisionPagada).toFixed(2))),
       },
       pagos,
       cupones: summarizeCouponHistory(cuponRows, usos),

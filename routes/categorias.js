@@ -3,6 +3,55 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 
+function sinTablaNueva(err) {
+  return err && err.code === '42P01';
+}
+
+// Productos con stock de venta en la categoría. Un perfume puede estar en varias
+// categorías (tabla producto_categorias); si la tabla aún no existe se usa categoria_id.
+async function productosDeCategoria(categoriaId) {
+  try {
+    return await sql`
+      SELECT p.id, p.nombre, p.precio_venta,
+        COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
+      FROM productos p
+      JOIN inventario i ON i.producto_id = p.id
+      JOIN almacenes a ON a.id = i.almacen_id
+      WHERE (p.categoria_id = ${categoriaId} OR p.id IN (SELECT producto_id FROM producto_categorias WHERE categoria_id = ${categoriaId})) AND a.tipo = 'venta'
+      GROUP BY p.id, p.nombre, p.precio_venta
+      HAVING COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) > 0
+      ORDER BY p.nombre
+    `;
+  } catch (err) {
+    if (!sinTablaNueva(err)) throw err;
+    return await sql`
+      SELECT p.id, p.nombre, p.precio_venta,
+        COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
+      FROM productos p
+      JOIN inventario i ON i.producto_id = p.id
+      JOIN almacenes a ON a.id = i.almacen_id
+      WHERE p.categoria_id = ${categoriaId} AND a.tipo = 'venta'
+      GROUP BY p.id, p.nombre, p.precio_venta
+      HAVING COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) > 0
+      ORDER BY p.nombre
+    `;
+  }
+}
+
+async function contarProductosDeCategoria(categoriaId) {
+  let rows;
+  try {
+    rows = await sql`SELECT COUNT(DISTINCT x.id)::int AS c FROM (
+      SELECT id FROM productos WHERE categoria_id = ${categoriaId}
+      UNION SELECT producto_id FROM producto_categorias WHERE categoria_id = ${categoriaId}
+    ) x`;
+  } catch (err) {
+    if (!sinTablaNueva(err)) throw err;
+    rows = await sql`SELECT COUNT(*)::int AS c FROM productos WHERE categoria_id = ${categoriaId}`;
+  }
+  return rows && rows[0] ? Number(rows[0].c) : 0;
+}
+
 function validarCategoria(body) {
   if (!body.nombre || typeof body.nombre !== 'string') return 'Nombre requerido';
   if (body.descripcion != null && typeof body.descripcion !== 'string')
@@ -17,17 +66,7 @@ router.get('/', async (req, res) => {
     const cats = await sql`SELECT * FROM categorias ORDER BY nombre`;
     const categorias = [];
     for (const c of cats || []) {
-      const productos = await sql`
-        SELECT p.id, p.nombre, p.precio_venta,
-          COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
-        FROM productos p
-        JOIN inventario i ON i.producto_id = p.id
-        JOIN almacenes a ON a.id = i.almacen_id
-        WHERE p.categoria_id = ${c.id} AND a.tipo = 'venta'
-        GROUP BY p.id, p.nombre, p.precio_venta
-        HAVING COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) > 0
-        ORDER BY p.nombre
-      `;
+      const productos = await productosDeCategoria(c.id);
       categorias.push({ ...c, productos: productos || [] });
     }
     res.json(categorias);
@@ -64,17 +103,7 @@ router.get('/:id', async (req, res) => {
     const rows = await sql`SELECT * FROM categorias WHERE id = ${id}`;
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const c = rows[0];
-    const productos = await sql`
-      SELECT p.id, p.nombre, p.precio_venta,
-        COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) AS stock_disponible
-      FROM productos p
-      JOIN inventario i ON i.producto_id = p.id
-      JOIN almacenes a ON a.id = i.almacen_id
-      WHERE p.categoria_id = ${c.id} AND a.tipo = 'venta'
-      GROUP BY p.id, p.nombre, p.precio_venta
-      HAVING COALESCE(SUM(i.stock_fisico - i.stock_comprometido),0) > 0
-      ORDER BY p.nombre
-    `;
+    const productos = await productosDeCategoria(c.id);
     res.json({ ...c, productos: productos || [] });
   } catch (e) {
     console.error('Error obteniendo categoria:', e);
@@ -111,9 +140,7 @@ router.delete('/:id', async (req, res) => {
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
     // Verificar que no existan productos asociados
-    const prodCount =
-      await sql`SELECT COUNT(*)::int AS c FROM productos WHERE categoria_id = ${id}`;
-    const c = prodCount && prodCount[0] ? Number(prodCount[0].c) : 0;
+    const c = await contarProductosDeCategoria(id);
     if (c > 0)
       return res.status(400).json({ error: 'No se puede eliminar: existen productos asociados' });
 

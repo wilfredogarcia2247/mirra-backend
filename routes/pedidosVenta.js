@@ -6,7 +6,8 @@ const { spawn } = require('child_process');
 const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
-const { revertirUsoCupon } = require('../services/cupones');
+const { buildDailySalesClose } = require('../services/dailySalesClose');
+const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -23,6 +24,7 @@ function logQueryTime(name, startMs, extra) {
 const AJUSTE_TIPOS = new Set(['descuento', 'recargo']);
 const AJUSTE_MODOS = new Set(['porcentaje', 'monto']);
 let ajustesTableEnsured = false;
+let fechaCompletadoColumnEnsured = false;
 
 async function ensurePedidoAjustesTable() {
   if (ajustesTableEnsured) return;
@@ -39,6 +41,13 @@ async function ensurePedidoAjustesTable() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_pedido_venta_ajustes_pedido ON pedido_venta_ajustes (pedido_venta_id)`;
   ajustesTableEnsured = true;
+}
+
+async function ensureFechaCompletadoColumn() {
+  if (fechaCompletadoColumnEnsured) return;
+  await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS completado_en TIMESTAMP WITHOUT TIME ZONE`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pedidos_venta_completado_en ON pedidos_venta (completado_en)`;
+  fechaCompletadoColumnEnsured = true;
 }
 
 function roundCurrency(value) {
@@ -898,6 +907,56 @@ router.get('/paginated', async (req, res) => {
   }
 });
 
+router.get('/cierre-diario', async (req, res) => {
+  const fecha = typeof req.query.fecha === 'string' ? req.query.fecha.trim() : '';
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? new Date(`${fecha}T00:00:00.000Z`) : null;
+  if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== fecha) {
+    return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+  }
+
+  try {
+    await ensureFechaCompletadoColumn();
+    const estadosCompletados = ['completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado'];
+    const qStart = Date.now();
+    const rows = await sql`
+      SELECT
+        pv.id AS pedido_id,
+        pv.completado_en AS fecha,
+        pv.nombre_cliente,
+        pv.tasa_cambio_monto,
+        pv.cupon_codigo,
+        COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
+        pvp.producto_id,
+        pvp.cantidad,
+        COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta,
+        COALESCE(NULLIF(pvp.formula_nombre, ''), NULLIF(pvp.nombre_producto, ''), prod.nombre, '') AS presentacion_nombre
+      FROM pedidos_venta pv
+      LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE LOWER(TRIM(COALESCE(pv.estado, ''))) = ANY(${estadosCompletados})
+        AND pv.completado_en >= ${fecha}::date
+        AND pv.completado_en < ${fecha}::date + INTERVAL '1 day'
+      ORDER BY pv.id ASC
+    `;
+    logQueryTime('pedidosVenta.cierreDiario', qStart, `fecha=${fecha} rows=${rows?.length || 0}`);
+
+    const pedidoIds = Array.from(new Set((rows || []).map((row) => Number(row.pedido_id))));
+    const ajustesMap = await fetchAjustesMapByPedidoIds(pedidoIds);
+    const historyRows = await sql`
+      SELECT COUNT(*)::int AS cantidad
+      FROM pedidos_venta
+      WHERE LOWER(TRIM(COALESCE(estado, ''))) = ANY(${estadosCompletados})
+        AND completado_en IS NULL
+    `;
+    const close = buildDailySalesClose(rows, ajustesMap, fecha);
+    close.pedidos_historicos_sin_fecha_completado = Number(historyRows?.[0]?.cantidad || 0);
+    return res.json(close);
+  } catch (err) {
+    console.error('Error generando cierre diario:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Error generando el cierre diario' });
+  }
+});
+
 // Endpoint optimizado para reportes (evita N+1 y payload innecesario)
 router.get('/reportes-resumen', async (req, res) => {
   try {
@@ -1283,8 +1342,10 @@ async function completarPedidoTransaccional(pedidoId, options) {
   if (ajustesSanitizados !== null) {
     await ensurePedidoAjustesTable();
   }
+  await ensureFechaCompletadoColumn();
 
   let baseTotal = 0;
+  let descuentoCupon = 0;
   const movimientos = [];
   let pagoInserted = null;
 
@@ -1298,6 +1359,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
       throw e;
     }
     const pedido = pedidoRows[0];
+    descuentoCupon = pedido.descuento_cupon || 0;
     if (pedido.estado === 'Completado') {
       await sql`ROLLBACK`;
       const e = new Error('Pedido ya completado');
@@ -1440,7 +1502,12 @@ async function completarPedidoTransaccional(pedidoId, options) {
       }
     }
 
-    await sql`UPDATE pedidos_venta SET estado = 'Completado' WHERE id = ${pedidoId}`;
+    await sql`
+      UPDATE pedidos_venta
+      SET estado = 'Completado',
+          completado_en = CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas'
+      WHERE id = ${pedidoId}
+    `;
 
     if (pagoObj) {
       try {
@@ -1527,7 +1594,8 @@ async function completarPedidoTransaccional(pedidoId, options) {
     throw err;
   }
 
-  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal }];
+  // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
+  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: descuentoCupon }];
   await attachAjustesToPedidos(resumen);
   const enriched = resumen[0];
 
@@ -1796,10 +1864,32 @@ router.post('/:id/items', async (req, res) => {
         nombreProducto = nombreProducto == null ? prod.nombre : nombreProducto;
       }
 
-      await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${costoUnitario || null}, ${precioUnitario || null}, ${nombreProducto || null}, ${formulaIdToSave || null}, ${formulaNombreToSave || null}, ${null}, ${false})`;
+      // Si el pedido ya tiene el mismo producto con la misma presentación (fórmula) y el
+      // mismo precio, se suma la cantidad a esa línea en vez de crear una nueva.
+      // No se suma a líneas que ya tienen orden de producción: esa orden se hizo para la
+      // cantidad anterior, así que las unidades nuevas van en su propia línea.
+      const existingLine = await sql`
+        SELECT id FROM pedido_venta_productos
+        WHERE pedido_venta_id = ${pedidoId}
+          AND producto_id = ${productoId}
+          AND formula_id IS NOT DISTINCT FROM ${formulaIdToSave || null}::int
+          AND precio_venta IS NOT DISTINCT FROM ${precioUnitario || null}::numeric
+          AND orden_produccion_id IS NULL
+          AND COALESCE(produccion_creada, FALSE) = FALSE
+        ORDER BY id ASC
+        LIMIT 1
+      `;
+      if (existingLine && existingLine[0]) {
+        await sql`UPDATE pedido_venta_productos SET cantidad = cantidad + ${cantidad} WHERE id = ${existingLine[0].id}`;
+      } else {
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedidoId}, ${productoId}, ${cantidad}, ${costoUnitario || null}, ${precioUnitario || null}, ${nombreProducto || null}, ${formulaIdToSave || null}, ${formulaNombreToSave || null}, ${null}, ${false})`;
+      }
     }
 
     await sql`COMMIT`;
+
+    // El cupón también aplica a los productos agregados: recalcular su descuento
+    await recalcularDescuentoCupon(pedidoId);
 
     // devolver pedido actualizado (reutilizar lógica de GET /:id)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
@@ -1837,6 +1927,7 @@ router.post('/:id/items', async (req, res) => {
     });
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
     await attachAjustesToPedidos([pedidoObj]);
+    await attachCuponesToPedidos([pedidoObj]);
     return res.status(201).json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) { }
@@ -1909,7 +2000,8 @@ router.put('/:id/ajustes', async (req, res) => {
 
       await sql`COMMIT`;
 
-      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal }];
+      // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
+      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: pedido.descuento_cupon || 0 }];
       await attachAjustesToPedidos(resumen);
       const enriched = resumen[0];
 
@@ -2415,9 +2507,22 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
       return res.status(400).json({ error: 'No se puede eliminar la línea: ya existe una orden de producción asociada' });
     }
 
-    // Eliminar la línea
-    await sql`DELETE FROM pedido_venta_productos WHERE id = ${lineaId}`;
+    // ?cantidad=N quita solo N unidades de la línea; sin cantidad (o si N cubre todas) se elimina la línea
+    const cantidadActual = Number(linea.cantidad) || 0;
+    const cantidadQuitar = req.query.cantidad != null ? Number(req.query.cantidad) : cantidadActual;
+    if (!Number.isInteger(cantidadQuitar) || cantidadQuitar < 1) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'La cantidad a quitar debe ser un número entero mayor que cero' });
+    }
+    if (cantidadQuitar < cantidadActual) {
+      await sql`UPDATE pedido_venta_productos SET cantidad = cantidad - ${cantidadQuitar} WHERE id = ${lineaId}`;
+    } else {
+      await sql`DELETE FROM pedido_venta_productos WHERE id = ${lineaId}`;
+    }
     await sql`COMMIT`;
+
+    // Con menos productos, el descuento del cupón también baja
+    await recalcularDescuentoCupon(pedidoId);
 
     // Devolver pedido actualizado (reusar consulta de detalle)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
@@ -2454,6 +2559,9 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
       };
     });
     const pedidoObj = { ...(pedidoRowsAfter && pedidoRowsAfter[0] ? pedidoRowsAfter[0] : {}), productos: productosMapeados, total };
+    // La pantalla usa esta respuesta directamente: incluir totales con ajustes y datos del cupón
+    await attachAjustesToPedidos([pedidoObj]);
+    await attachCuponesToPedidos([pedidoObj]);
     return res.json(pedidoObj);
   } catch (err) {
     try { await sql`ROLLBACK`; } catch (e) { }
