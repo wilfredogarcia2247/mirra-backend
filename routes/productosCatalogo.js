@@ -4,6 +4,7 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { getAgotadoProductIds } = require('../services/productosAgotados');
 const { getCategoriasPorProducto } = require('../services/productoCategorias');
+const { getMasPedidosIds } = require('../services/productosMasPedidos');
 
 // GET / -> catálogo público de productos
 // Query params opcionales:
@@ -124,6 +125,15 @@ router.get('/', async (req, res) => {
     const agotados = await getAgotadoProductIds(productIds);
     // Un perfume puede estar en varias categorías (Hombre y Mujer = unisex)
     const categoriasPorProducto = await getCategoriasPorProducto(productIds);
+    // Etiqueta "🔥 Más pedido": solo entre los que se ven en la tienda y no están agotados.
+    // Si falla el cálculo, el catálogo se muestra igual sin etiqueta.
+    const candidatosMasPedido = (rows || [])
+      .filter((p) => !agotados.has(Number(p.id)) && (formulasPorProducto[p.id] || []).length > 0)
+      .map((p) => Number(p.id));
+    const masPedidos = await getMasPedidosIds(candidatosMasPedido, categoriasPorProducto).catch((err) => {
+      console.error('No se pudo calcular "Más pedido":', err.message);
+      return new Set();
+    });
 
     const enriched = (rows || []).map((p) => {
       const inventario =
@@ -159,6 +169,7 @@ router.get('/', async (req, res) => {
         precio_venta: p.precio_venta,
         destacado: Boolean(p.destacado),
         agotado: agotados.has(Number(p.id)),
+        mas_pedido: masPedidos.has(Number(p.id)),
         formulas: formulasPorProducto[p.id] || [],
         image_url: p.image_url,
         categoria,
