@@ -8,6 +8,7 @@ const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
+const { historialClienteDePedido, rankingClientes } = require('../services/clientesFrecuentes');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -1199,101 +1200,24 @@ router.get('/clientes-top-resumen', async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
-    const limitRaw = Number(req.query.limit || 10);
-    const pedidosLimitRaw = Number(req.query.pedidos_limit || 5);
-    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 10;
-    const pedidosLimit = Number.isFinite(pedidosLimitRaw)
-      ? Math.min(Math.max(pedidosLimitRaw, 1), 20)
-      : 5;
-
-    const qStart = Date.now();
-    const rows = await sql`
-      WITH pedidos_totales AS (
-        SELECT
-          pv.id,
-          pv.fecha,
-          pv.estado,
-          COALESCE(NULLIF(TRIM(pv.nombre_cliente), ''), 'Cliente sin nombre') AS cliente_nombre,
-          COALESCE(NULLIF(TRIM(pv.telefono), ''), NULLIF(TRIM(pv.cedula), ''), NULLIF(TRIM(pv.nombre_cliente), ''), CONCAT('cliente-', pv.id::text)) AS cliente_key,
-          COUNT(pvp.id)::int AS items_count,
-          COALESCE(SUM(COALESCE(pvp.cantidad, 0) * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0) AS total
-        FROM pedidos_venta pv
-        LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
-        LEFT JOIN productos prod ON prod.id = pvp.producto_id
-        WHERE LOWER(COALESCE(pv.estado, '')) IN ('completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado')
-          AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
-          AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
-        GROUP BY pv.id, pv.fecha, pv.estado, cliente_nombre, cliente_key
-      ),
-      top_clientes AS (
-        SELECT
-          cliente_key,
-          MAX(cliente_nombre) AS cliente_nombre,
-          COUNT(*)::int AS pedidos_count,
-          COALESCE(SUM(total), 0) AS monto_total
-        FROM pedidos_totales
-        GROUP BY cliente_key
-        ORDER BY COALESCE(SUM(total), 0) DESC
-        LIMIT ${limit}
-      ),
-      pedidos_rank AS (
-        SELECT
-          pt.*,
-          ROW_NUMBER() OVER (PARTITION BY pt.cliente_key ORDER BY pt.fecha DESC, pt.id DESC) AS rn
-        FROM pedidos_totales pt
-        INNER JOIN top_clientes tc ON tc.cliente_key = pt.cliente_key
-      )
-      SELECT
-        tc.cliente_key,
-        tc.cliente_nombre,
-        tc.pedidos_count,
-        tc.monto_total,
-        pr.id AS pedido_id,
-        pr.fecha AS pedido_fecha,
-        pr.estado AS pedido_estado,
-        pr.total AS pedido_total,
-        pr.items_count AS pedido_items_count
-      FROM top_clientes tc
-      LEFT JOIN pedidos_rank pr ON pr.cliente_key = tc.cliente_key AND pr.rn <= ${pedidosLimit}
-      ORDER BY tc.monto_total DESC, tc.cliente_nombre ASC, pr.fecha DESC, pr.id DESC
-    `;
-    logQueryTime(
-      'pedidosVenta.clientesTopResumen',
-      qStart,
-      `limit=${limit} pedidos_limit=${pedidosLimit} rows=${rows?.length || 0}`
-    );
-
-    const grouped = [];
-    const byKey = new Map();
-    for (const row of rows || []) {
-      if (!byKey.has(row.cliente_key)) {
-        const clientObj = {
-          cliente_key: row.cliente_key,
-          nombre: row.cliente_nombre,
-          pedidos: Number(row.pedidos_count || 0),
-          monto: Number(row.monto_total || 0),
-          pedidos_resumen: [],
-        };
-        byKey.set(row.cliente_key, clientObj);
-        grouped.push(clientObj);
-      }
-
-      if (row.pedido_id != null) {
-        byKey.get(row.cliente_key).pedidos_resumen.push({
-          id: row.pedido_id,
-          fecha: row.pedido_fecha,
-          estado: row.pedido_estado,
-          total: Number(row.pedido_total || 0),
-          items_count: Number(row.pedido_items_count || 0),
-        });
-      }
+    const fechaOk = (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!fechaOk(fechaInicio) || !fechaOk(fechaFin)) {
+      return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
     }
+    const limitRaw = Number(req.query.limit || 20);
+    const pedidosLimitRaw = Number(req.query.pedidos_limit || 5);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 100) : 20;
+    const pedidosLimit = Number.isFinite(pedidosLimitRaw) ? Math.min(Math.max(Math.trunc(pedidosLimitRaw), 1), 20) : 5;
+    const orden = req.query.orden === 'pedidos' ? 'pedidos' : 'monto';
 
-    res.json({
-      limit,
-      pedidos_limit: pedidosLimit,
-      data: grouped,
-    });
+    await ensurePedidoAjustesTable();
+    await ensureFechaCompletadoColumn();
+    await asegurarEsquemaDescuentoMayor();
+    const qStart = Date.now();
+    const { resumen, data } = await rankingClientes(sql, { fechaInicio, fechaFin, limit, pedidosLimit, orden });
+    logQueryTime('pedidosVenta.clientesTopResumen', qStart, `limit=${limit} orden=${orden} clientes=${data.length}`);
+
+    res.json({ limit, pedidos_limit: pedidosLimit, orden, resumen, data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1355,6 +1279,13 @@ router.get('/:id', async (req, res) => {
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
     await attachAjustesToPedidos([pedidoObj]);
     await attachCuponesToPedidos([pedidoObj]);
+    // Fidelización: cuántas veces ha comprado este cliente y cuánto lleva comprado
+    try {
+      pedidoObj.cliente_historial = await historialClienteDePedido(sql, pedidoObj.id);
+    } catch (e) {
+      console.error('No se pudo calcular el historial del cliente:', e && e.message ? e.message : e);
+      pedidoObj.cliente_historial = null;
+    }
     res.json(pedidoObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
