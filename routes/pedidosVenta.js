@@ -7,6 +7,7 @@ const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha
 const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
+const { buildDeliveryReport } = require('../services/deliveryReport');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
@@ -1048,6 +1049,37 @@ router.get('/reportes-resumen', async (req, res) => {
     res.json(Array.from(byPedidoId.values()));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Reporte: métodos de entrega y de dónde nos compran (estado/ciudad de los envíos nacionales).
+// Cuenta todos los pedidos que no están cancelados, dentro del periodo elegido.
+router.get('/reportes-entregas', async (req, res) => {
+  try {
+    const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+    const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+    const filas = await sql`
+      SELECT
+        pv.id,
+        pv.tipo_entrega,
+        pv.datos_entrega,
+        GREATEST(
+          COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0)
+            - COALESCE(MAX(pv.descuento_cupon), 0),
+          0
+        ) AS total
+      FROM pedidos_venta pv
+      LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE LOWER(TRIM(COALESCE(pv.estado, ''))) NOT IN ('cancelado', 'cancelada')
+        AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
+        AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
+      GROUP BY pv.id
+    `;
+    res.json(buildDeliveryReport(filas));
+  } catch (err) {
+    console.error('Error en reportes-entregas:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Error al generar el reporte de entregas' });
   }
 });
 
