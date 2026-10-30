@@ -8,7 +8,7 @@ const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
-const { historialClienteDePedido, rankingClientes } = require('../services/clientesFrecuentes');
+const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS } = require('../services/clientesFrecuentes');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -1218,6 +1218,55 @@ router.get('/clientes-top-resumen', async (req, res) => {
     logQueryTime('pedidosVenta.clientesTopResumen', qStart, `limit=${limit} orden=${orden} clientes=${data.length}`);
 
     res.json({ limit, pedidos_limit: pedidosLimit, orden, resumen, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function leerPeriodo(req) {
+  const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+  const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+  const ok = (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v);
+  return ok(fechaInicio) && ok(fechaFin) ? { fechaInicio, fechaFin } : null;
+}
+
+async function asegurarEsquemaClientes() {
+  await ensurePedidoAjustesTable();
+  await ensureFechaCompletadoColumn();
+  await asegurarEsquemaDescuentoMayor();
+}
+
+// Recompras: pedidos de clientes nuevos vs. recompras, por mes, y clientes agrupados por veces que compraron
+router.get('/clientes-recompra', async (req, res) => {
+  try {
+    const periodo = leerPeriodo(req);
+    if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+    await asegurarEsquemaClientes();
+    const qStart = Date.now();
+    const data = await estadisticasRecompra(sql, periodo);
+    logQueryTime('pedidosVenta.clientesRecompra', qStart, `pedidos=${data.resumen.pedidos}`);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+ o todos), paginado, con búsqueda
+router.get('/clientes-grupo', async (req, res) => {
+  try {
+    const periodo = leerPeriodo(req);
+    if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+    const gruposValidos = ['todos', '2+', ...GRUPOS.map((g) => g.id)];
+    const grupo = gruposValidos.includes(String(req.query.grupo)) ? String(req.query.grupo) : 'todos';
+    const pageRaw = Number(req.query.page || 1);
+    const sizeRaw = Number(req.query.page_size || 20);
+    const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
+    const pageSize = Number.isFinite(sizeRaw) ? Math.min(Math.max(Math.trunc(sizeRaw), 5), 100) : 20;
+    const orden = ['monto', 'compras', 'reciente'].includes(String(req.query.orden)) ? String(req.query.orden) : 'monto';
+    const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : '';
+    await asegurarEsquemaClientes();
+    const data = await clientesPorGrupo(sql, { ...periodo, grupo, page, pageSize, orden, q });
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -154,4 +154,250 @@ async function rankingClientes(sql, { fechaInicio = '', fechaFin = '', limit = 2
   return { resumen, data };
 }
 
-module.exports = { historialClienteDePedido, rankingClientes, ESTADOS_COMPLETADOS };
+// ---------------------------------------------------------------------------
+// Recompras: cada pedido se marca como "nuevo" (primera compra del cliente en toda su historia)
+// o "recompra" (el cliente ya había comprado antes). Los grupos cuentan TODAS las compras del
+// cliente, pero solo aparecen los clientes que compraron dentro del periodo elegido.
+// Parámetros: $1 estados, $2 fecha inicio ('' = sin límite), $3 fecha fin ('' = sin límite).
+// ---------------------------------------------------------------------------
+const RECOMPRA_CTES = `
+  ${PEDIDOS_CLIENTE_CTE},
+  numerados AS (
+    SELECT pc.*,
+      ROW_NUMBER() OVER (PARTITION BY cliente_key ORDER BY fecha, id) AS n_compra,
+      LAG(fecha) OVER (PARTITION BY cliente_key ORDER BY fecha, id) AS fecha_anterior
+    FROM pedidos_cliente pc
+  ),
+  en_periodo AS (
+    SELECT * FROM numerados
+    WHERE (NULLIF($2, '')::date IS NULL OR fecha >= NULLIF($2, '')::date)
+      AND (NULLIF($3, '')::date IS NULL OR fecha < NULLIF($3, '')::date + INTERVAL '1 day')
+  ),
+  historico AS (
+    SELECT
+      cliente_key,
+      COUNT(*)::int AS compras,
+      COALESCE(SUM(monto), 0) AS monto,
+      MIN(fecha) AS primera_compra,
+      MAX(fecha) AS ultima_compra,
+      (ARRAY_AGG(nombre ORDER BY fecha DESC, id DESC) FILTER (WHERE nombre IS NOT NULL))[1] AS nombre,
+      (ARRAY_AGG(cedula ORDER BY fecha DESC, id DESC) FILTER (WHERE cedula IS NOT NULL))[1] AS cedula,
+      (ARRAY_AGG(telefono ORDER BY fecha DESC, id DESC) FILTER (WHERE telefono IS NOT NULL))[1] AS telefono
+    FROM pedidos_cliente
+    GROUP BY cliente_key
+  ),
+  activos AS (
+    SELECT h.*,
+      CASE WHEN h.compras >= 10 THEN '10+' WHEN h.compras >= 6 THEN '6-9' ELSE h.compras::text END AS grupo,
+      COALESCE(p.compras_periodo, 0) AS compras_periodo,
+      COALESCE(p.monto_periodo, 0) AS monto_periodo
+    FROM historico h
+    JOIN (
+      SELECT cliente_key, COUNT(*)::int AS compras_periodo, COALESCE(SUM(monto), 0) AS monto_periodo
+      FROM en_periodo GROUP BY cliente_key
+    ) p ON p.cliente_key = h.cliente_key
+  )`;
+
+const GRUPOS = [
+  { id: '1', etiqueta: '1 vez', minimo: 1 },
+  { id: '2', etiqueta: '2 veces', minimo: 2 },
+  { id: '3', etiqueta: '3 veces', minimo: 3 },
+  { id: '4', etiqueta: '4 veces', minimo: 4 },
+  { id: '5', etiqueta: '5 veces', minimo: 5 },
+  { id: '6-9', etiqueta: '6 a 9 veces', minimo: 6 },
+  { id: '10+', etiqueta: '10 veces o más', minimo: 10 },
+];
+
+const pct = (parte, total) => (Number(total) > 0 ? Math.round((Number(parte) / Number(total)) * 1000) / 10 : 0);
+
+async function estadisticasRecompra(sql, { fechaInicio = '', fechaFin = '' } = {}) {
+  const params = [ESTADOS_COMPLETADOS, fechaInicio, fechaFin];
+
+  const [resumenRows, mesesRows, gruposRows] = await Promise.all([
+    sql.query(`
+      WITH ${RECOMPRA_CTES}
+      SELECT
+        (SELECT COUNT(*) FROM en_periodo)::int AS pedidos,
+        (SELECT COUNT(*) FROM en_periodo WHERE n_compra = 1)::int AS pedidos_nuevos,
+        (SELECT COUNT(*) FROM en_periodo WHERE n_compra > 1)::int AS pedidos_recompra,
+        (SELECT COALESCE(SUM(monto), 0) FROM en_periodo) AS monto,
+        (SELECT COALESCE(SUM(monto), 0) FROM en_periodo WHERE n_compra = 1) AS monto_nuevos,
+        (SELECT COALESCE(SUM(monto), 0) FROM en_periodo WHERE n_compra > 1) AS monto_recompra,
+        (SELECT COUNT(*) FROM activos)::int AS clientes,
+        (SELECT COUNT(*) FROM activos WHERE compras >= 2)::int AS clientes_recurrentes,
+        (SELECT COUNT(DISTINCT cliente_key) FROM en_periodo WHERE n_compra = 1)::int AS clientes_nuevos,
+        (SELECT COUNT(*) FROM activos a WHERE a.compras >= 2
+           AND EXISTS (SELECT 1 FROM en_periodo e WHERE e.cliente_key = a.cliente_key AND e.n_compra = 1))::int AS nuevos_que_volvieron,
+        (SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (fecha - fecha_anterior)) / 86400)
+           FROM en_periodo WHERE n_compra = 2) AS dias_segunda_compra,
+        (SELECT COALESCE(SUM(compras), 0) FROM historico)::int AS pedidos_historicos,
+        (SELECT COUNT(*) FROM historico)::int AS clientes_historicos
+    `, params),
+    sql.query(`
+      WITH ${RECOMPRA_CTES},
+      base AS (
+        SELECT * FROM en_periodo
+        WHERE NOT (NULLIF($2, '') IS NULL AND NULLIF($3, '') IS NULL)
+           OR fecha >= DATE_TRUNC('month', NOW()) - INTERVAL '11 months'
+      )
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', b.fecha), 'YYYY-MM') AS mes,
+        COUNT(*) FILTER (WHERE b.n_compra = 1)::int AS pedidos_nuevos,
+        COUNT(*) FILTER (WHERE b.n_compra > 1)::int AS pedidos_recompra,
+        COALESCE(SUM(b.monto) FILTER (WHERE b.n_compra = 1), 0) AS monto_nuevos,
+        COALESCE(SUM(b.monto) FILTER (WHERE b.n_compra > 1), 0) AS monto_recompra,
+        COUNT(*) FILTER (WHERE b.n_compra = 1 AND h.compras >= 2)::int AS nuevos_que_volvieron
+      FROM base b
+      JOIN historico h ON h.cliente_key = b.cliente_key
+      GROUP BY 1
+      ORDER BY 1
+    `, params),
+    sql.query(`
+      WITH ${RECOMPRA_CTES}
+      SELECT grupo, COUNT(*)::int AS clientes, COALESCE(SUM(monto), 0) AS monto, COALESCE(SUM(compras), 0)::int AS compras
+      FROM activos
+      GROUP BY grupo
+    `, params),
+  ]);
+
+  const r = resumenRows[0] || {};
+  const resumen = {
+    pedidos: Number(r.pedidos || 0),
+    pedidos_nuevos: Number(r.pedidos_nuevos || 0),
+    pedidos_recompra: Number(r.pedidos_recompra || 0),
+    tasa_recompra: pct(r.pedidos_recompra, r.pedidos),
+    monto: redondear(r.monto),
+    monto_nuevos: redondear(r.monto_nuevos),
+    monto_recompra: redondear(r.monto_recompra),
+    porcentaje_monto_recompra: pct(r.monto_recompra, r.monto),
+    clientes: Number(r.clientes || 0),
+    clientes_recurrentes: Number(r.clientes_recurrentes || 0),
+    porcentaje_clientes_recurrentes: pct(r.clientes_recurrentes, r.clientes),
+    clientes_nuevos: Number(r.clientes_nuevos || 0),
+    nuevos_que_volvieron: Number(r.nuevos_que_volvieron || 0),
+    porcentaje_nuevos_que_volvieron: pct(r.nuevos_que_volvieron, r.clientes_nuevos),
+    dias_segunda_compra: r.dias_segunda_compra == null ? null : Math.round(Number(r.dias_segunda_compra)),
+    compras_por_cliente: Number(r.clientes) > 0 ? Math.round((Number(r.pedidos) / Number(r.clientes)) * 100) / 100 : 0,
+    pedidos_historicos: Number(r.pedidos_historicos || 0),
+    clientes_historicos: Number(r.clientes_historicos || 0),
+  };
+
+  const meses = (mesesRows || []).map((m) => {
+    const nuevos = Number(m.pedidos_nuevos || 0);
+    const recompra = Number(m.pedidos_recompra || 0);
+    return {
+      mes: m.mes,
+      pedidos: nuevos + recompra,
+      pedidos_nuevos: nuevos,
+      pedidos_recompra: recompra,
+      tasa_recompra: pct(recompra, nuevos + recompra),
+      monto_nuevos: redondear(m.monto_nuevos),
+      monto_recompra: redondear(m.monto_recompra),
+      clientes_nuevos: nuevos,
+      nuevos_que_volvieron: Number(m.nuevos_que_volvieron || 0),
+      porcentaje_nuevos_que_volvieron: pct(m.nuevos_que_volvieron, nuevos),
+    };
+  });
+
+  const porGrupo = new Map((gruposRows || []).map((g) => [g.grupo, g]));
+  const totalClientes = resumen.clientes;
+  const grupos = GRUPOS.map((g) => {
+    const row = porGrupo.get(g.id) || {};
+    const clientes = Number(row.clientes || 0);
+    const alMenos = (gruposRows || [])
+      .filter((x) => {
+        const n = x.grupo === '10+' ? 10 : x.grupo === '6-9' ? 6 : Number(x.grupo);
+        return n >= g.minimo;
+      })
+      .reduce((s, x) => s + Number(x.clientes || 0), 0);
+    return {
+      id: g.id,
+      etiqueta: g.etiqueta,
+      minimo: g.minimo,
+      clientes,
+      porcentaje: pct(clientes, totalClientes),
+      monto: redondear(row.monto),
+      compras: Number(row.compras || 0),
+      ticket_promedio: Number(row.compras) > 0 ? redondear(Number(row.monto) / Number(row.compras)) : 0,
+      al_menos: alMenos,
+      porcentaje_al_menos: pct(alMenos, totalClientes),
+    };
+  });
+
+  return { resumen, meses, grupos };
+}
+
+// Lista paginada de los clientes de un grupo (o todos / 2+), con sus últimas compras.
+async function clientesPorGrupo(sql, { fechaInicio = '', fechaFin = '', grupo = 'todos', page = 1, pageSize = 20, orden = 'monto', q = '' } = {}) {
+  const ordenSql = orden === 'compras'
+    ? 'compras DESC, monto DESC'
+    : orden === 'reciente' ? 'ultima_compra DESC' : 'monto DESC, compras DESC';
+  const offset = (page - 1) * pageSize;
+  const busqueda = String(q || '').trim();
+  const busquedaDigitos = busqueda.replace(/[^0-9]/g, '');
+  const params = [ESTADOS_COMPLETADOS, fechaInicio, fechaFin, grupo, busqueda, busquedaDigitos, pageSize, offset];
+
+  const rows = await sql.query(`
+    WITH ${RECOMPRA_CTES},
+    filtrados AS (
+      SELECT * FROM activos
+      WHERE ($4 = 'todos' OR ($4 = '2+' AND compras >= 2) OR grupo = $4)
+        AND ($5 = '' OR nombre ILIKE '%' || $5 || '%'
+             OR ($6 <> '' AND (REGEXP_REPLACE(COALESCE(cedula, ''), '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
+                               OR REGEXP_REPLACE(COALESCE(telefono, ''), '[^0-9]', '', 'g') LIKE '%' || $6 || '%')))
+    ),
+    pagina AS (
+      SELECT *, COUNT(*) OVER () AS total
+      FROM filtrados
+      ORDER BY ${ordenSql}, cliente_key
+      LIMIT $7 OFFSET $8
+    ),
+    ultimos AS (
+      SELECT pc.cliente_key, pc.id, pc.fecha, pc.monto, pc.items,
+        ROW_NUMBER() OVER (PARTITION BY pc.cliente_key ORDER BY pc.fecha DESC, pc.id DESC) AS rn
+      FROM pedidos_cliente pc JOIN pagina p ON p.cliente_key = pc.cliente_key
+    )
+    SELECT p.*, u.id AS pedido_id, u.fecha AS pedido_fecha, u.monto AS pedido_monto, u.items AS pedido_items
+    FROM pagina p
+    LEFT JOIN ultimos u ON u.cliente_key = p.cliente_key AND u.rn <= 5
+    ORDER BY ${ordenSql.replace(/(compras|monto|ultima_compra)/g, 'p.$1')}, p.cliente_key, u.fecha DESC, u.id DESC
+  `, params);
+
+  let total = 0;
+  const data = [];
+  const porKey = new Map();
+  for (const row of rows || []) {
+    total = Number(row.total || 0);
+    if (!porKey.has(row.cliente_key)) {
+      const compras = Number(row.compras || 0);
+      const monto = redondear(row.monto);
+      const c = {
+        cliente_key: row.cliente_key,
+        nombre: row.nombre || 'Cliente sin nombre',
+        cedula: row.cedula || null,
+        telefono: row.telefono || null,
+        compras,
+        monto,
+        ticket_promedio: compras > 0 ? redondear(monto / compras) : 0,
+        compras_periodo: Number(row.compras_periodo || 0),
+        monto_periodo: redondear(row.monto_periodo),
+        primera_compra: row.primera_compra || null,
+        ultima_compra: row.ultima_compra || null,
+        pedidos_resumen: [],
+      };
+      porKey.set(row.cliente_key, c);
+      data.push(c);
+    }
+    if (row.pedido_id != null) {
+      porKey.get(row.cliente_key).pedidos_resumen.push({
+        id: Number(row.pedido_id),
+        fecha: row.pedido_fecha,
+        total: redondear(row.pedido_monto),
+        items_count: Number(row.pedido_items || 0),
+      });
+    }
+  }
+  return { total, page, page_size: pageSize, paginas: Math.max(1, Math.ceil(total / pageSize)), data };
+}
+
+module.exports = { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, ESTADOS_COMPLETADOS, GRUPOS };
