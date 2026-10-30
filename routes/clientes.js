@@ -40,11 +40,25 @@ async function findClienteByCedula(cedula) {
     const rows = await sql`
     SELECT id, nombre, telefono, cedula
     FROM clientes
-    WHERE UPPER(REGEXP_REPLACE(cedula, '[^A-Z0-9]', '', 'g')) = ${cleanCedula}
+    WHERE REGEXP_REPLACE(UPPER(cedula), '[^A-Z0-9]', '', 'g') = ${cleanCedula}
+    ORDER BY id
+    LIMIT 1
+  `;
+    if (rows && rows[0]) return rows[0];
+
+    // La tienda antes guardaba "V-12345678" y ahora el cliente escribe solo "12345678" (o al revés):
+    // si no hay coincidencia exacta, comparamos solo los números. Preferimos la cédula venezolana (V) y el registro más antiguo.
+    const digits = cleanCedula.replace(/[^0-9]/g, '');
+    if (digits.length < 5) return null;
+    const byDigits = await sql`
+    SELECT id, nombre, telefono, cedula
+    FROM clientes
+    WHERE REGEXP_REPLACE(cedula, '[^0-9]', '', 'g') = ${digits}
+    ORDER BY (UPPER(LEFT(TRIM(cedula), 1)) = 'V') DESC, id
     LIMIT 1
   `;
 
-    return rows && rows[0] ? rows[0] : null;
+    return byDigits && byDigits[0] ? byDigits[0] : null;
 }
 
 async function resolveClienteFromBody(body = {}) {
