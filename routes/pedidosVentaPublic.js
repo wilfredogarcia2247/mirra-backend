@@ -198,7 +198,14 @@ router.post('/', async (req, res) => {
     // Ejecutar en transacción: crear pedido público y guardar snapshots por línea
     await sql`BEGIN`;
     try {
-      const tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
+      // Tasa del pedido: la que envía la tienda; si no llega, se usa la tasa activa en ese momento
+      // (así el pedido nunca queda sin tasa y el total en Bs se ve desde el inicio).
+      let tasaMontoVal = tasa_cambio_monto != null ? Number(tasa_cambio_monto) : null;
+      if (tasaMontoVal == null) {
+        const activa = await sql`SELECT monto FROM tasas_cambio WHERE activo = TRUE ORDER BY id DESC LIMIT 1`;
+        const montoActivo = activa?.[0]?.monto != null ? Number(activa[0].monto) : null;
+        if (montoActivo != null && Number.isFinite(montoActivo) && montoActivo > 0) tasaMontoVal = montoActivo;
+      }
 
       // Insertar pedido público (sin validar ni reservar stock)
       const pedido = await sql`
