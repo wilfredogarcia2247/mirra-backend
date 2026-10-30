@@ -17,6 +17,13 @@ const {
 } = require('../services/influencerCommissions');
 const { normalizeOrderFulfillment } = require('../services/orderFulfillment');
 const { ensureSucursalesTable, sql: branchSql } = require('../services/sucursales');
+const {
+  obtenerConfigDescuentoMayor,
+  calcularDescuentoMayor,
+  elegirDescuento,
+  lineasDelPedido,
+  reglasParaGuardar,
+} = require('../services/descuentoMayor');
 
 function formatOrderWhatsappNotificationPayload(pedido) {
   return {
@@ -27,6 +34,8 @@ function formatOrderWhatsappNotificationPayload(pedido) {
     tasa_cambio_monto: pedido.tasa_cambio_monto,
     cupon_codigo: pedido.cupon_codigo,
     descuento_cupon: pedido.descuento_cupon,
+    descuento_mayor: pedido.descuento_mayor,
+    descuento_mayor_porcentaje: pedido.descuento_mayor_porcentaje,
     items: Array.isArray(pedido.productos)
       ? pedido.productos.map((p) => ({
         name: p.producto_nombre,
@@ -195,6 +204,15 @@ router.post('/', async (req, res) => {
     const origenIp = (req.headers['x-forwarded-for'] || req.ip || '').toString();
     const userAgent = (req.headers['user-agent'] || '').toString();
 
+    // Reglas del descuento al mayor (también crea sus columnas la primera vez).
+    // Si no se pueden leer, el pedido se crea igual, sin descuento al mayor.
+    let configMayor = null;
+    try {
+      configMayor = await obtenerConfigDescuentoMayor();
+    } catch (error) {
+      console.error('[descuento-mayor] No se pudieron leer las reglas; pedido sin descuento al mayor:', error.message || error);
+    }
+
     // Ejecutar en transacción: crear pedido público y guardar snapshots por línea
     await sql`BEGIN`;
     try {
@@ -264,10 +282,38 @@ router.post('/', async (req, res) => {
       `;
       const totalBase = totalRow && totalRow[0] ? Number(totalRow[0].total) || 0 : 0;
 
+      // Descuento al mayor (solo perfumes de los tamaños configurados) frente al cupón:
+      // se aplica únicamente el que descuenta más; nunca los dos.
+      const mayor = configMayor
+        ? calcularDescuentoMayor(await lineasDelPedido(pedido[0].id), configMayor)
+        : { unidades: 0, base: 0, porcentaje: 0, descuento: 0, siguiente: null };
+      const descuentoCuponPosible = cuponAplicado
+        ? calcularDescuento(totalBase, cuponAplicado.descuento_porcentaje)
+        : 0;
+      const descuentoElegido = elegirDescuento(descuentoCuponPosible, mayor.descuento);
+      let cuponNoAplicado = null;
+      if (descuentoElegido === 'mayor' && cuponAplicado) {
+        cuponNoAplicado = { codigo: cuponAplicado.codigo, descuento_porcentaje: cuponAplicado.descuento_porcentaje };
+        cuponAplicado = null;
+      }
+      const descuentoMayor = descuentoElegido === 'mayor' ? mayor.descuento : 0;
+      const porcentajeMayor = descuentoElegido === 'mayor' ? mayor.porcentaje : null;
+      if (configMayor) {
+        // Porcentaje 0 = pedido evaluado sin descuento: así, si el panel le agrega perfumes,
+        // el descuento al mayor se recalcula (los pedidos viejos, con NULL, no se tocan).
+        // Se guarda una copia de las reglas de hoy: si cambian en el panel, este pedido no cambia.
+        await sql`
+          UPDATE pedidos_venta
+          SET descuento_mayor = ${descuentoMayor}, descuento_mayor_porcentaje = ${porcentajeMayor ?? 0},
+              descuento_mayor_reglas = ${JSON.stringify(reglasParaGuardar(configMayor))}::jsonb
+          WHERE id = ${pedido[0].id}
+        `;
+      }
+
       // Aplicar el cupón: descuento calculado en el servidor y registrado en el canje
       let descuentoCupon = 0;
       if (cuponAplicado) {
-        descuentoCupon = calcularDescuento(totalBase, cuponAplicado.descuento_porcentaje);
+        descuentoCupon = descuentoCuponPosible;
         const esInfluencer = cuponAplicado.colaborador_tipo === 'influencer';
         const baseComisionable = esInfluencer
           ? calculateCommissionableBase(Math.max(0, totalBase - descuentoCupon), 0)
@@ -339,8 +385,8 @@ router.post('/', async (req, res) => {
           subtotal,
         };
       });
-      // El total devuelto es el neto: ya incluye el descuento del cupón aplicado
-      const totalFinal = Math.max(0, Number((total - descuentoCupon).toFixed(2)));
+      // El total devuelto es el neto: ya incluye el descuento aplicado (cupón o al mayor)
+      const totalFinal = Math.max(0, Number((total - descuentoCupon - descuentoMayor).toFixed(2)));
       // No incluir componentes en la respuesta pública: el front usará `formula_id` para crear la orden de producción
       const pedidoObj = {
         ...pedido[0],
@@ -351,6 +397,11 @@ router.post('/', async (req, res) => {
         cupon_id: cuponAplicado ? cuponAplicado.id : (pedido[0].cupon_id ?? null),
         cupon_codigo: cuponAplicado ? cuponAplicado.codigo : (pedido[0].cupon_codigo ?? null),
         cupon_descuento_porcentaje: cuponAplicado ? cuponAplicado.descuento_porcentaje : null,
+        descuento_mayor: Number(descuentoMayor.toFixed(2)),
+        descuento_mayor_porcentaje: porcentajeMayor,
+        descuento_mayor_unidades: mayor.unidades,
+        // Si el cliente escribió un cupón pero el descuento al mayor era más alto, el cupón no se usó
+        cupon_no_aplicado: cuponNoAplicado,
         // Compatibilidad cliente: antiguamente se devolvía `produccionesCreadas`.
         // Aquí no creamos producciones al momento de crear el pedido, así que devolvemos arreglo vacío.
         produccionesCreadas: [],

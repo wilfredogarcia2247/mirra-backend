@@ -9,6 +9,11 @@ const { snapshotPaidOrderCommission } = require('../services/influencerCommissio
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
+const {
+  asegurarEsquemaDescuentoMayor,
+  recalcularDescuentoMayor,
+  cambiarDescuentoMayorPedido,
+} = require('../services/descuentoMayor');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -158,14 +163,14 @@ async function fetchAjustesMapByPedidoIds(ids) {
   return map;
 }
 
-// El descuento del cupón aplicado en el checkout público se descuenta del total del pedido
+// El descuento del checkout público (cupón o descuento al mayor) se descuenta del total del pedido
 function applyCuponToBreakdown(pedido, breakdown) {
-  const descuentoCupon = roundCurrency(pedido.descuento_cupon || 0);
-  if (descuentoCupon <= 0) return breakdown;
+  const descuentoCheckout = roundCurrency(Number(pedido.descuento_cupon || 0) + Number(pedido.descuento_mayor || 0));
+  if (descuentoCheckout <= 0) return breakdown;
   return {
     ...breakdown,
-    total_descuentos: roundCurrency(breakdown.total_descuentos + descuentoCupon),
-    total_final: Math.max(0, roundCurrency(breakdown.total_final - descuentoCupon)),
+    total_descuentos: roundCurrency(breakdown.total_descuentos + descuentoCheckout),
+    total_final: Math.max(0, roundCurrency(breakdown.total_final - descuentoCheckout)),
   };
 }
 
@@ -917,6 +922,7 @@ router.get('/cierre-diario', async (req, res) => {
 
   try {
     await ensureFechaCompletadoColumn();
+    await asegurarEsquemaDescuentoMayor();
     const estadosCompletados = ['completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado'];
     const qStart = Date.now();
     const rows = await sql`
@@ -927,6 +933,8 @@ router.get('/cierre-diario', async (req, res) => {
         pv.tasa_cambio_monto,
         pv.cupon_codigo,
         COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
+        COALESCE(pv.descuento_mayor, 0) AS descuento_mayor,
+        pv.descuento_mayor_porcentaje,
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta,
@@ -963,6 +971,7 @@ router.get('/reportes-resumen', async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+    await asegurarEsquemaDescuentoMayor();
     const qStart = Date.now();
     const rows = await sql`
       SELECT
@@ -974,6 +983,7 @@ router.get('/reportes-resumen', async (req, res) => {
         pv.cedula,
         pv.cupon_codigo,
         COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
+        COALESCE(pv.descuento_mayor, 0) AS descuento_mayor,
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.nombre_producto, prod.nombre) AS nombre_producto,
@@ -1000,6 +1010,7 @@ router.get('/reportes-resumen', async (req, res) => {
           cedula: row.cedula,
           cupon_codigo: row.cupon_codigo || null,
           descuento_cupon: Number(row.descuento_cupon || 0),
+          descuento_mayor: Number(row.descuento_mayor || 0),
           productos: [],
           total: 0,
         });
@@ -1022,11 +1033,11 @@ router.get('/reportes-resumen', async (req, res) => {
       }
     }
 
-    // El descuento del cupón se reparte proporcionalmente entre las líneas para que
-    // los reportes (ventas, productos, clientes) reflejen lo que el cliente pagó.
+    // El descuento del checkout (cupón o al mayor) se reparte proporcionalmente entre las líneas
+    // para que los reportes (ventas, productos, clientes) reflejen lo que el cliente pagó.
     for (const pedido of byPedidoId.values()) {
       const bruto = pedido.total;
-      const descuento = Number(pedido.descuento_cupon || 0);
+      const descuento = Number(pedido.descuento_cupon || 0) + Number(pedido.descuento_mayor || 0);
       if (descuento <= 0 || bruto <= 0) {
         pedido.total_bruto = roundCurrency(bruto);
         continue;
@@ -1058,6 +1069,7 @@ router.get('/reportes-entregas', async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+    await asegurarEsquemaDescuentoMayor();
     const filas = await sql`
       SELECT
         pv.id,
@@ -1065,7 +1077,8 @@ router.get('/reportes-entregas', async (req, res) => {
         pv.datos_entrega,
         GREATEST(
           COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0)
-            - COALESCE(MAX(pv.descuento_cupon), 0),
+            - COALESCE(MAX(pv.descuento_cupon), 0)
+            - COALESCE(MAX(pv.descuento_mayor), 0),
           0
         ) AS total
       FROM pedidos_venta pv
@@ -1378,6 +1391,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
 
   let baseTotal = 0;
   let descuentoCupon = 0;
+  let descuentoMayor = 0;
   const movimientos = [];
   let pagoInserted = null;
 
@@ -1392,6 +1406,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
     }
     const pedido = pedidoRows[0];
     descuentoCupon = pedido.descuento_cupon || 0;
+    descuentoMayor = pedido.descuento_mayor || 0;
     if (pedido.estado === 'Completado') {
       await sql`ROLLBACK`;
       const e = new Error('Pedido ya completado');
@@ -1627,7 +1642,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
   }
 
   // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
-  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: descuentoCupon }];
+  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: descuentoCupon, descuento_mayor: descuentoMayor }];
   await attachAjustesToPedidos(resumen);
   const enriched = resumen[0];
 
@@ -1920,8 +1935,9 @@ router.post('/:id/items', async (req, res) => {
 
     await sql`COMMIT`;
 
-    // El cupón también aplica a los productos agregados: recalcular su descuento
+    // El cupón (o el descuento al mayor) también aplica a los productos agregados: recalcularlo
     await recalcularDescuentoCupon(pedidoId);
+    await recalcularDescuentoMayor(pedidoId);
 
     // devolver pedido actualizado (reutilizar lógica de GET /:id)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
@@ -1965,6 +1981,22 @@ router.post('/:id/items', async (req, res) => {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error agregando items al pedido:', err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Quitar o volver a aplicar el descuento al mayor de un pedido (p. ej. el cliente paga con Cashea)
+router.put('/:id/descuento-mayor', async (req, res) => {
+  if (typeof req.body?.aplicar !== 'boolean') {
+    return res.status(400).json({ error: 'Indica si el descuento al mayor se aplica (true) o se quita (false)' });
+  }
+  try {
+    const resultado = await cambiarDescuentoMayorPedido(req.params.id, req.body.aplicar);
+    if (!resultado.ok) return res.status(resultado.status || 400).json({ error: resultado.error });
+    const { ok, ...datos } = resultado;
+    return res.json(datos);
+  } catch (err) {
+    console.error('Error cambiando descuento al mayor del pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo cambiar el descuento al mayor' });
   }
 });
 
@@ -2033,7 +2065,7 @@ router.put('/:id/ajustes', async (req, res) => {
       await sql`COMMIT`;
 
       // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
-      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: pedido.descuento_cupon || 0 }];
+      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: pedido.descuento_cupon || 0, descuento_mayor: pedido.descuento_mayor || 0 }];
       await attachAjustesToPedidos(resumen);
       const enriched = resumen[0];
 
@@ -2553,8 +2585,9 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
     }
     await sql`COMMIT`;
 
-    // Con menos productos, el descuento del cupón también baja
+    // Con menos productos, el descuento del cupón (o al mayor) también baja
     await recalcularDescuentoCupon(pedidoId);
+    await recalcularDescuentoMayor(pedidoId);
 
     // Devolver pedido actualizado (reusar consulta de detalle)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;

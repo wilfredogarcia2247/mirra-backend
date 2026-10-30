@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { asegurarEsquemaDescuentoMayor } = require('../services/descuentoMayor');
 
 async function clientesTableExists() {
     const rows = await sql`SELECT to_regclass('public.clientes') AS exists`;
@@ -182,16 +183,17 @@ router.post('/lookup-or-create', async (req, res) => {
 
 router.get('/resumen', async (req, res) => {
     try {
+        await asegurarEsquemaDescuentoMayor();
         const limit = Number(req.query.limit || 10);
         const rows = await sql`
       WITH ordenes AS (
         SELECT pv.id,
                pv.cliente_id,
                COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, 0)), 0)::numeric AS bruto,
-               COALESCE(pv.descuento_cupon, 0)::numeric AS descuento
+               (COALESCE(pv.descuento_cupon, 0) + COALESCE(pv.descuento_mayor, 0))::numeric AS descuento
         FROM pedidos_venta pv
         LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
-        GROUP BY pv.id, pv.cliente_id, pv.descuento_cupon
+        GROUP BY pv.id, pv.cliente_id, pv.descuento_cupon, pv.descuento_mayor
       )
       SELECT c.id,
              c.nombre,

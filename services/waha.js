@@ -120,6 +120,12 @@ function formatOrderNotificationMessage(order) {
   if (cuponCodigo && descuentoCupon > 0) {
     lines.push(`🎟️ *Cupon:* ${cuponCodigo} (-${formatTotalBs(descuentoCupon, order.tasa_cambio_monto)})`);
   }
+  const descuentoMayor = Number(order.descuento_mayor || 0);
+  if (descuentoMayor > 0) {
+    const pct = Number(order.descuento_mayor_porcentaje);
+    const pctTexto = Number.isFinite(pct) && pct > 0 ? ` ${pct}%` : '';
+    lines.push(`🎁 *Descuento al mayor${pctTexto}:* -${formatTotalBs(descuentoMayor, order.tasa_cambio_monto)}`);
+  }
 
   lines.push(`💰 *Total a pagar:* ${formatTotalBs(order.total, order.tasa_cambio_monto)}`);
 
