@@ -25,6 +25,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^7.8.7",
     "multer": "^2.0.2",
+    "sharp": "^0.33.5",
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
