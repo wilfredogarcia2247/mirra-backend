@@ -452,4 +452,4 @@ async function clientesPorGrupo(sql, { fechaInicio = '', fechaFin = '', grupo = 
   return { total, page, page_size: pageSize, paginas: Math.max(1, Math.ceil(total / pageSize)), data };
 }
 
-module.exports = { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, ESTADOS_COMPLETADOS, GRUPOS, INACTIVIDADES };
+module.exports = { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, ESTADOS_COMPLETADOS, GRUPOS, INACTIVIDADES, RECOMPRA_CTES };

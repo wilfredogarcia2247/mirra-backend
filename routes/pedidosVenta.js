@@ -9,6 +9,7 @@ const { snapshotPaidOrderCommission } = require('../services/influencerCommissio
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
+const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -1246,6 +1247,30 @@ router.get('/clientes-recompra', async (req, res) => {
     const data = await estadisticasRecompra(sql, periodo);
     logQueryTime('pedidosVenta.clientesRecompra', qStart, `pedidos=${data.resumen.pedidos}`);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reporte "Cómo vamos": compara el periodo A con el B y trae la evolución mes a mes.
+// ?a_inicio&a_fin&b_inicio&b_fin (obligatorias) &ev_inicio&ev_fin (opcionales), formato AAAA-MM-DD.
+router.get('/reporte-comparativo', async (req, res) => {
+  try {
+    const fechaOk = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim());
+    const q = req.query;
+    if (![q.a_inicio, q.a_fin, q.b_inicio, q.b_fin].every(fechaOk)) {
+      return res.status(400).json({ error: 'Fechas inválidas; use el formato AAAA-MM-DD' });
+    }
+    const conEvolucion = fechaOk(q.ev_inicio) && fechaOk(q.ev_fin);
+    await asegurarEsquemaClientes();
+    const qStart = Date.now();
+    const [a, b, evolucion] = await Promise.all([
+      datosPeriodo(sql, q.a_inicio.trim(), q.a_fin.trim()),
+      datosPeriodo(sql, q.b_inicio.trim(), q.b_fin.trim()),
+      conEvolucion ? evolucionMensual(sql, q.ev_inicio.trim(), q.ev_fin.trim()) : Promise.resolve([]),
+    ]);
+    logQueryTime('pedidosVenta.reporteComparativo', qStart, `pedidos=${a.resumen.pedidos}/${b.resumen.pedidos}`);
+    res.json({ a, b, evolucion });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
