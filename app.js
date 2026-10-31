@@ -143,6 +143,7 @@ app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
 app.use('/api/cintillo', authMiddleware, require('./routes/cintilloMensajes'));
 // Descuento al mayor (reglas editables por el administrador)
 app.use('/api/descuento-mayor', authMiddleware, require('./routes/descuentoMayor'));
+app.use('/api/costos-presentacion', authMiddleware, require('./routes/costosPresentacion'));
 // Categorias
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 // Marcas

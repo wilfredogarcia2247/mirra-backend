@@ -11,6 +11,7 @@ const { buildDeliveryReport } = require('../services/deliveryReport');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
+const { asegurarTablaCostos } = require('../services/costosPresentacion');
 const { calcularCashea, asegurarTablaCashea, esFormaCashea, registrarCompraCashea, casheaDePedido, resumenCashea, casheaDelDia } = require('../services/cashea');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
@@ -1268,6 +1269,7 @@ router.get('/reporte-comparativo', async (req, res) => {
     const conEvolucion = fechaOk(q.ev_inicio) && fechaOk(q.ev_fin);
     await asegurarEsquemaClientes();
     await asegurarTablaCashea(sql);
+    await asegurarTablaCostos();
     const qStart = Date.now();
     const [a, b, evolucion] = await Promise.all([
       datosPeriodo(sql, q.a_inicio.trim(), q.a_fin.trim()),

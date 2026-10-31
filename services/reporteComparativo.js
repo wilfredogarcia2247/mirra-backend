@@ -21,7 +21,7 @@ const LINEAS_CTE = `
       pvp.producto_id,
       COALESCE(pvp.cantidad, 0)::numeric AS cantidad,
       COALESCE(pvp.cantidad, 0) * COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS bruto,
-      COALESCE(NULLIF(pvp.costo_unitario, 0), NULLIF(f.costo, 0), 0) AS costo_u,
+      COALESCE(NULLIF(pvp.costo_unitario, 0), NULLIF(f.costo, 0), 0) AS costo_guardado,
       COALESCE(NULLIF(TRIM(prod.nombre), ''), NULLIF(TRIM(pvp.nombre_producto), ''), 'Producto #' || pvp.producto_id::text) AS producto,
       LOWER(COALESCE(pvp.formula_nombre, pvp.nombre_producto, prod.nombre, '')) AS nombre_pres
     FROM en_periodo e
@@ -29,13 +29,24 @@ const LINEAS_CTE = `
     LEFT JOIN productos prod ON prod.id = pvp.producto_id
     LEFT JOIN formulas f ON f.id = pvp.formula_id
   ),
+  lineas_ml AS (
+    SELECT l.*, REPLACE(SUBSTRING(l.nombre_pres FROM '([0-9]+(?:[.,][0-9]+)?)\\s*ml'), ',', '.') AS ml
+    FROM lineas l
+  ),
+  -- Costo de cada perfume: el especial de ese perfume y tamaño, si no el general del tamaño
+  -- (Finanzas → Costos por presentación), si no el guardado en la venta o en la presentación.
+  -- La tabla costos_presentacion la crea services/costosPresentacion.js antes de esta consulta.
   lineas_netas AS (
     SELECT l.*,
       CASE WHEN SUM(l.bruto) OVER (PARTITION BY l.pedido_id) > 0
         THEN l.bruto * l.monto_pedido / SUM(l.bruto) OVER (PARTITION BY l.pedido_id)
         ELSE 0 END AS neto,
-      REPLACE(SUBSTRING(l.nombre_pres FROM '([0-9]+(?:[.,][0-9]+)?)\\s*ml'), ',', '.') AS ml
-    FROM lineas l
+      COALESCE(
+        (SELECT c.costo FROM costos_presentacion c WHERE c.producto_id = l.producto_id AND c.ml = NULLIF(l.ml, '')::numeric),
+        (SELECT c.costo FROM costos_presentacion c WHERE c.producto_id = 0 AND c.ml = NULLIF(l.ml, '')::numeric),
+        NULLIF(l.costo_guardado, 0),
+        0) AS costo_u
+    FROM lineas_ml l
   )`;
 
 const num = (v) => Number(v || 0);
