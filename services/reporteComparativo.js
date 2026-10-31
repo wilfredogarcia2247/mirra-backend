@@ -74,7 +74,9 @@ async function datosPeriodo(sql, inicio, fin) {
       (SELECT COALESCE(SUM(neto), 0) FROM lineas_netas WHERE costo_u > 0) AS ventas_con_costo,
       (SELECT COALESCE(SUM(cantidad * costo_u), 0) FROM lineas_netas WHERE costo_u > 0) AS costo,
       (SELECT COALESCE(json_agg(x), '[]'::json) FROM (
-         SELECT COALESCE(ml, 'otro') AS ml, SUM(cantidad) AS unidades, SUM(neto) AS monto
+         SELECT COALESCE(ml, 'otro') AS ml, SUM(cantidad) AS unidades, SUM(neto) AS monto,
+                SUM(cantidad * costo_u) FILTER (WHERE costo_u > 0) AS costo,
+                SUM(neto) FILTER (WHERE costo_u > 0) AS monto_con_costo
          FROM lineas_netas GROUP BY 1
       ) x) AS presentaciones,
       (SELECT COALESCE(json_agg(x), '[]'::json) FROM (
@@ -124,7 +126,7 @@ async function datosPeriodo(sql, inicio, fin) {
   const costo = dinero(r.costo);
   const lista = (v, campos) => (Array.isArray(v) ? v : []).map((x) => {
     const o = { ...x };
-    for (const c of campos) o[c] = c === 'monto' || c === 'descuento' ? dinero(o[c]) : num(o[c]);
+    for (const c of campos) o[c] = ['monto', 'descuento', 'costo', 'monto_con_costo'].includes(c) ? dinero(o[c]) : num(o[c]);
     return o;
   });
 
@@ -148,7 +150,7 @@ async function datosPeriodo(sql, inicio, fin) {
       // Qué parte de las ventas tiene costo cargado (0 a 100)
       cobertura_costo: ventas > 0 ? Math.round((ventasConCosto / ventas) * 1000) / 10 : 0,
     },
-    presentaciones: lista(r.presentaciones, ['unidades', 'monto']),
+    presentaciones: lista(r.presentaciones, ['unidades', 'monto', 'costo', 'monto_con_costo']),
     productos: lista(r.productos, ['producto_id', 'unidades', 'monto']),
     entregas: lista(r.entregas, ['pedidos', 'monto']),
     estados: lista(r.estados, ['pedidos', 'monto']),
