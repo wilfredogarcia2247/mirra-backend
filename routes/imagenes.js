@@ -25,6 +25,7 @@ const {
   GetObjectCommand,
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { claveMiniatura, crearMiniatura, CACHE_CONTROL } = require('../services/miniaturas');
 
 const router = express.Router();
 
@@ -143,6 +144,23 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       Body: req.file.buffer,
       ContentType: req.file.mimetype,
     }));
+
+    // Copia pequeña para las cintas de la portada. Si falla, la subida sigue igual
+    // (la tienda usa la foto original cuando no hay miniatura).
+    const keyMini = claveMiniatura(key);
+    if (keyMini && req.file.mimetype !== 'image/gif') {
+      try {
+        await s3.send(new PutObjectCommand({
+          Bucket: BUCKET,
+          Key: keyMini,
+          Body: await crearMiniatura(req.file.buffer),
+          ContentType: 'image/webp',
+          CacheControl: CACHE_CONTROL,
+        }));
+      } catch (errMini) {
+        console.error('No se pudo crear la miniatura de', key, errMini.message);
+      }
+    }
 
     // Preferir URL pública fija
     const publicUrl = buildPublicUrl(key);
