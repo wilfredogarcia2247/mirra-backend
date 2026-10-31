@@ -10,6 +10,7 @@ const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
+const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { calcularCashea, asegurarTablaCashea, esFormaCashea, registrarCompraCashea, casheaDePedido, resumenCashea, casheaDelDia } = require('../services/cashea');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
@@ -1462,7 +1463,12 @@ async function completarPedidoTransaccional(pedidoId, options) {
           const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
           if (produced < qtyNeeded) {
             await sql`ROLLBACK`;
-            const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
+            let nombre = `producto #${linea.producto_id}`;
+            try {
+              const n = await sql`SELECT nombre FROM productos WHERE id = ${linea.producto_id}`;
+              if (n[0]?.nombre) nombre = n[0].nombre;
+            } catch (eNombre) { /* se usa el número */ }
+            const e = new Error(`Falta producir ${nombre} (listos ${produced} de ${qtyNeeded})`);
             e.code = 'NOT_PRODUCED';
             throw e;
           }
@@ -1547,7 +1553,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
 
       if (qtyNeeded > 0) {
         await sql`ROLLBACK`;
-        const e = new Error(`Stock insuficiente para producto ${linea.producto_id}`);
+        const e = new Error(`No hay suficiente ${await nombreProducto(sql, linea.producto_id)} en inventario para completar el pedido`);
         e.code = 'INSUFFICIENT_STOCK';
         throw e;
       }
@@ -2785,7 +2791,7 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
           }
 
           if (totalAvailable < required) {
-            throw new Error(`Materia prima ${comp.materia_prima_id} insuficiente (necesita ${required}, disponible ${totalAvailable})`);
+            throw new Error(await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: orden.producto_terminado_id, formulaId: orden.formula_id, materiaPrimaId: comp.materia_prima_id, requerido: required, disponible: totalAvailable }));
           }
 
           for (const inv of mpInventarios) {
@@ -2820,7 +2826,7 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
             `;
 
             if (!consumed || consumed.length === 0) {
-              throw new Error(`Inventario insuficiente para materia prima ${update.materia_prima_id} en orden ${orden.id}`);
+              throw new Error(await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: orden.producto_terminado_id, formulaId: orden.formula_id, materiaPrimaId: update.materia_prima_id }));
             }
           }
 

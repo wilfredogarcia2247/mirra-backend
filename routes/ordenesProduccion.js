@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 
 function validarOrden(body) {
   if (!body.producto_terminado_id || isNaN(Number(body.producto_terminado_id)))
@@ -386,7 +387,7 @@ router.post('/:id/completar', async (req, res) => {
         await sql`ROLLBACK`;
         return res
           .status(400)
-          .json({ error: `Materia prima ${item.materia_prima_id} insuficiente. Requerido: ${required}, Disponible: ${totalAvailable}` });
+          .json({ error: await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: ord.producto_terminado_id, formulaId: ord.formula_id, materiaPrimaId: item.materia_prima_id, requerido: required, disponible: totalAvailable }) });
       }
 
       // Consumir inventario (queries individuales pero dentro de transacción = rápido)
@@ -407,7 +408,7 @@ router.post('/:id/completar', async (req, res) => {
         if (!consumed || consumed.length === 0) {
           await sql`ROLLBACK`;
           return res.status(400).json({
-            error: `Inventario insuficiente al consumir materia prima id ${item.materia_prima_id}`,
+            error: await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: ord.producto_terminado_id, formulaId: ord.formula_id, materiaPrimaId: item.materia_prima_id }),
           });
         }
 
