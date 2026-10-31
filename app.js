@@ -109,6 +109,7 @@ app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
 // Endpoint público para obtener la tasa de cambio activa
 app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
+app.use('/api/descuento-mayor/activo', require('./routes/descuentoMayorPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
 // Rastreo MRW Venezuela (público — clientes sin cuenta pueden rastrear)
@@ -140,6 +141,8 @@ app.use('/api/precios', authMiddleware, require('./routes/precios'));
 // Tasas de cambio
 app.use('/api/tasas-cambio', authMiddleware, require('./routes/tasasCambio'));
 app.use('/api/cintillo', authMiddleware, require('./routes/cintilloMensajes'));
+// Descuento al mayor (reglas editables por el administrador)
+app.use('/api/descuento-mayor', authMiddleware, require('./routes/descuentoMayor'));
 // Categorias
 app.use('/api/categorias', authMiddleware, require('./routes/categorias'));
 // Marcas

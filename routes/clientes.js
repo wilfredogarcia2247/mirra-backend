@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { asegurarEsquemaDescuentoMayor } = require('../services/descuentoMayor');
 
 async function clientesTableExists() {
     const rows = await sql`SELECT to_regclass('public.clientes') AS exists`;
@@ -39,11 +40,25 @@ async function findClienteByCedula(cedula) {
     const rows = await sql`
     SELECT id, nombre, telefono, cedula
     FROM clientes
-    WHERE UPPER(REGEXP_REPLACE(cedula, '[^A-Z0-9]', '', 'g')) = ${cleanCedula}
+    WHERE REGEXP_REPLACE(UPPER(cedula), '[^A-Z0-9]', '', 'g') = ${cleanCedula}
+    ORDER BY id
+    LIMIT 1
+  `;
+    if (rows && rows[0]) return rows[0];
+
+    // La tienda antes guardaba "V-12345678" y ahora el cliente escribe solo "12345678" (o al revés):
+    // si no hay coincidencia exacta, comparamos solo los números. Preferimos la cédula venezolana (V) y el registro más antiguo.
+    const digits = cleanCedula.replace(/[^0-9]/g, '');
+    if (digits.length < 5) return null;
+    const byDigits = await sql`
+    SELECT id, nombre, telefono, cedula
+    FROM clientes
+    WHERE REGEXP_REPLACE(cedula, '[^0-9]', '', 'g') = ${digits}
+    ORDER BY (UPPER(LEFT(TRIM(cedula), 1)) = 'V') DESC, id
     LIMIT 1
   `;
 
-    return rows && rows[0] ? rows[0] : null;
+    return byDigits && byDigits[0] ? byDigits[0] : null;
 }
 
 async function resolveClienteFromBody(body = {}) {
@@ -182,16 +197,17 @@ router.post('/lookup-or-create', async (req, res) => {
 
 router.get('/resumen', async (req, res) => {
     try {
+        await asegurarEsquemaDescuentoMayor();
         const limit = Number(req.query.limit || 10);
         const rows = await sql`
       WITH ordenes AS (
         SELECT pv.id,
                pv.cliente_id,
                COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, 0)), 0)::numeric AS bruto,
-               COALESCE(pv.descuento_cupon, 0)::numeric AS descuento
+               (COALESCE(pv.descuento_cupon, 0) + COALESCE(pv.descuento_mayor, 0))::numeric AS descuento
         FROM pedidos_venta pv
         LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
-        GROUP BY pv.id, pv.cliente_id, pv.descuento_cupon
+        GROUP BY pv.id, pv.cliente_id, pv.descuento_cupon, pv.descuento_mayor
       )
       SELECT c.id,
              c.nombre,

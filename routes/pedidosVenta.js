@@ -7,7 +7,14 @@ const { sendTextMessage, formatOrderSuccessMessage } = require('../services/waha
 const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
+const { buildDeliveryReport } = require('../services/deliveryReport');
+const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS } = require('../services/clientesFrecuentes');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
+const {
+  asegurarEsquemaDescuentoMayor,
+  recalcularDescuentoMayor,
+  cambiarDescuentoMayorPedido,
+} = require('../services/descuentoMayor');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
 const PROFILE_QUERIES = String(process.env.PROFILE_QUERIES || 'true').toLowerCase() !== 'false';
@@ -157,14 +164,14 @@ async function fetchAjustesMapByPedidoIds(ids) {
   return map;
 }
 
-// El descuento del cupón aplicado en el checkout público se descuenta del total del pedido
+// El descuento del checkout público (cupón o descuento al mayor) se descuenta del total del pedido
 function applyCuponToBreakdown(pedido, breakdown) {
-  const descuentoCupon = roundCurrency(pedido.descuento_cupon || 0);
-  if (descuentoCupon <= 0) return breakdown;
+  const descuentoCheckout = roundCurrency(Number(pedido.descuento_cupon || 0) + Number(pedido.descuento_mayor || 0));
+  if (descuentoCheckout <= 0) return breakdown;
   return {
     ...breakdown,
-    total_descuentos: roundCurrency(breakdown.total_descuentos + descuentoCupon),
-    total_final: Math.max(0, roundCurrency(breakdown.total_final - descuentoCupon)),
+    total_descuentos: roundCurrency(breakdown.total_descuentos + descuentoCheckout),
+    total_final: Math.max(0, roundCurrency(breakdown.total_final - descuentoCheckout)),
   };
 }
 
@@ -916,6 +923,7 @@ router.get('/cierre-diario', async (req, res) => {
 
   try {
     await ensureFechaCompletadoColumn();
+    await asegurarEsquemaDescuentoMayor();
     const estadosCompletados = ['completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado'];
     const qStart = Date.now();
     const rows = await sql`
@@ -926,6 +934,8 @@ router.get('/cierre-diario', async (req, res) => {
         pv.tasa_cambio_monto,
         pv.cupon_codigo,
         COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
+        COALESCE(pv.descuento_mayor, 0) AS descuento_mayor,
+        pv.descuento_mayor_porcentaje,
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta,
@@ -962,6 +972,7 @@ router.get('/reportes-resumen', async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+    await asegurarEsquemaDescuentoMayor();
     const qStart = Date.now();
     const rows = await sql`
       SELECT
@@ -973,6 +984,7 @@ router.get('/reportes-resumen', async (req, res) => {
         pv.cedula,
         pv.cupon_codigo,
         COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
+        COALESCE(pv.descuento_mayor, 0) AS descuento_mayor,
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.nombre_producto, prod.nombre) AS nombre_producto,
@@ -999,6 +1011,7 @@ router.get('/reportes-resumen', async (req, res) => {
           cedula: row.cedula,
           cupon_codigo: row.cupon_codigo || null,
           descuento_cupon: Number(row.descuento_cupon || 0),
+          descuento_mayor: Number(row.descuento_mayor || 0),
           productos: [],
           total: 0,
         });
@@ -1021,11 +1034,11 @@ router.get('/reportes-resumen', async (req, res) => {
       }
     }
 
-    // El descuento del cupón se reparte proporcionalmente entre las líneas para que
-    // los reportes (ventas, productos, clientes) reflejen lo que el cliente pagó.
+    // El descuento del checkout (cupón o al mayor) se reparte proporcionalmente entre las líneas
+    // para que los reportes (ventas, productos, clientes) reflejen lo que el cliente pagó.
     for (const pedido of byPedidoId.values()) {
       const bruto = pedido.total;
-      const descuento = Number(pedido.descuento_cupon || 0);
+      const descuento = Number(pedido.descuento_cupon || 0) + Number(pedido.descuento_mayor || 0);
       if (descuento <= 0 || bruto <= 0) {
         pedido.total_bruto = roundCurrency(bruto);
         continue;
@@ -1048,6 +1061,39 @@ router.get('/reportes-resumen', async (req, res) => {
     res.json(Array.from(byPedidoId.values()));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Reporte: métodos de entrega y de dónde nos compran (estado/ciudad de los envíos nacionales).
+// Cuenta todos los pedidos que no están cancelados, dentro del periodo elegido.
+router.get('/reportes-entregas', async (req, res) => {
+  try {
+    const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+    const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+    await asegurarEsquemaDescuentoMayor();
+    const filas = await sql`
+      SELECT
+        pv.id,
+        pv.tipo_entrega,
+        pv.datos_entrega,
+        GREATEST(
+          COALESCE(SUM(pvp.cantidad * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0)
+            - COALESCE(MAX(pv.descuento_cupon), 0)
+            - COALESCE(MAX(pv.descuento_mayor), 0),
+          0
+        ) AS total
+      FROM pedidos_venta pv
+      LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE LOWER(TRIM(COALESCE(pv.estado, ''))) NOT IN ('cancelado', 'cancelada')
+        AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
+        AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
+      GROUP BY pv.id
+    `;
+    res.json(buildDeliveryReport(filas));
+  } catch (err) {
+    console.error('Error en reportes-entregas:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Error al generar el reporte de entregas' });
   }
 });
 
@@ -1154,101 +1200,73 @@ router.get('/clientes-top-resumen', async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
-    const limitRaw = Number(req.query.limit || 10);
-    const pedidosLimitRaw = Number(req.query.pedidos_limit || 5);
-    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 10;
-    const pedidosLimit = Number.isFinite(pedidosLimitRaw)
-      ? Math.min(Math.max(pedidosLimitRaw, 1), 20)
-      : 5;
-
-    const qStart = Date.now();
-    const rows = await sql`
-      WITH pedidos_totales AS (
-        SELECT
-          pv.id,
-          pv.fecha,
-          pv.estado,
-          COALESCE(NULLIF(TRIM(pv.nombre_cliente), ''), 'Cliente sin nombre') AS cliente_nombre,
-          COALESCE(NULLIF(TRIM(pv.telefono), ''), NULLIF(TRIM(pv.cedula), ''), NULLIF(TRIM(pv.nombre_cliente), ''), CONCAT('cliente-', pv.id::text)) AS cliente_key,
-          COUNT(pvp.id)::int AS items_count,
-          COALESCE(SUM(COALESCE(pvp.cantidad, 0) * COALESCE(pvp.precio_venta, prod.precio_venta, 0)), 0) AS total
-        FROM pedidos_venta pv
-        LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
-        LEFT JOIN productos prod ON prod.id = pvp.producto_id
-        WHERE LOWER(COALESCE(pv.estado, '')) IN ('completado', 'completada', 'completa', 'finalizado', 'finalizada', 'entregado', 'pagado', 'terminado')
-          AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
-          AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
-        GROUP BY pv.id, pv.fecha, pv.estado, cliente_nombre, cliente_key
-      ),
-      top_clientes AS (
-        SELECT
-          cliente_key,
-          MAX(cliente_nombre) AS cliente_nombre,
-          COUNT(*)::int AS pedidos_count,
-          COALESCE(SUM(total), 0) AS monto_total
-        FROM pedidos_totales
-        GROUP BY cliente_key
-        ORDER BY COALESCE(SUM(total), 0) DESC
-        LIMIT ${limit}
-      ),
-      pedidos_rank AS (
-        SELECT
-          pt.*,
-          ROW_NUMBER() OVER (PARTITION BY pt.cliente_key ORDER BY pt.fecha DESC, pt.id DESC) AS rn
-        FROM pedidos_totales pt
-        INNER JOIN top_clientes tc ON tc.cliente_key = pt.cliente_key
-      )
-      SELECT
-        tc.cliente_key,
-        tc.cliente_nombre,
-        tc.pedidos_count,
-        tc.monto_total,
-        pr.id AS pedido_id,
-        pr.fecha AS pedido_fecha,
-        pr.estado AS pedido_estado,
-        pr.total AS pedido_total,
-        pr.items_count AS pedido_items_count
-      FROM top_clientes tc
-      LEFT JOIN pedidos_rank pr ON pr.cliente_key = tc.cliente_key AND pr.rn <= ${pedidosLimit}
-      ORDER BY tc.monto_total DESC, tc.cliente_nombre ASC, pr.fecha DESC, pr.id DESC
-    `;
-    logQueryTime(
-      'pedidosVenta.clientesTopResumen',
-      qStart,
-      `limit=${limit} pedidos_limit=${pedidosLimit} rows=${rows?.length || 0}`
-    );
-
-    const grouped = [];
-    const byKey = new Map();
-    for (const row of rows || []) {
-      if (!byKey.has(row.cliente_key)) {
-        const clientObj = {
-          cliente_key: row.cliente_key,
-          nombre: row.cliente_nombre,
-          pedidos: Number(row.pedidos_count || 0),
-          monto: Number(row.monto_total || 0),
-          pedidos_resumen: [],
-        };
-        byKey.set(row.cliente_key, clientObj);
-        grouped.push(clientObj);
-      }
-
-      if (row.pedido_id != null) {
-        byKey.get(row.cliente_key).pedidos_resumen.push({
-          id: row.pedido_id,
-          fecha: row.pedido_fecha,
-          estado: row.pedido_estado,
-          total: Number(row.pedido_total || 0),
-          items_count: Number(row.pedido_items_count || 0),
-        });
-      }
+    const fechaOk = (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!fechaOk(fechaInicio) || !fechaOk(fechaFin)) {
+      return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
     }
+    const limitRaw = Number(req.query.limit || 20);
+    const pedidosLimitRaw = Number(req.query.pedidos_limit || 5);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 100) : 20;
+    const pedidosLimit = Number.isFinite(pedidosLimitRaw) ? Math.min(Math.max(Math.trunc(pedidosLimitRaw), 1), 20) : 5;
+    const orden = req.query.orden === 'pedidos' ? 'pedidos' : 'monto';
 
-    res.json({
-      limit,
-      pedidos_limit: pedidosLimit,
-      data: grouped,
-    });
+    await ensurePedidoAjustesTable();
+    await ensureFechaCompletadoColumn();
+    await asegurarEsquemaDescuentoMayor();
+    const qStart = Date.now();
+    const { resumen, data } = await rankingClientes(sql, { fechaInicio, fechaFin, limit, pedidosLimit, orden });
+    logQueryTime('pedidosVenta.clientesTopResumen', qStart, `limit=${limit} orden=${orden} clientes=${data.length}`);
+
+    res.json({ limit, pedidos_limit: pedidosLimit, orden, resumen, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function leerPeriodo(req) {
+  const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
+  const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
+  const ok = (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v);
+  return ok(fechaInicio) && ok(fechaFin) ? { fechaInicio, fechaFin } : null;
+}
+
+async function asegurarEsquemaClientes() {
+  await ensurePedidoAjustesTable();
+  await ensureFechaCompletadoColumn();
+  await asegurarEsquemaDescuentoMayor();
+}
+
+// Recompras: pedidos de clientes nuevos vs. recompras, por mes, y clientes agrupados por veces que compraron
+router.get('/clientes-recompra', async (req, res) => {
+  try {
+    const periodo = leerPeriodo(req);
+    if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+    await asegurarEsquemaClientes();
+    const qStart = Date.now();
+    const data = await estadisticasRecompra(sql, periodo);
+    logQueryTime('pedidosVenta.clientesRecompra', qStart, `pedidos=${data.resumen.pedidos}`);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+ o todos), paginado, con búsqueda
+router.get('/clientes-grupo', async (req, res) => {
+  try {
+    const periodo = leerPeriodo(req);
+    if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+    const gruposValidos = ['todos', '2+', ...GRUPOS.map((g) => g.id)];
+    const grupo = gruposValidos.includes(String(req.query.grupo)) ? String(req.query.grupo) : 'todos';
+    const pageRaw = Number(req.query.page || 1);
+    const sizeRaw = Number(req.query.page_size || 20);
+    const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
+    const pageSize = Number.isFinite(sizeRaw) ? Math.min(Math.max(Math.trunc(sizeRaw), 5), 100) : 20;
+    const orden = ['monto', 'compras', 'reciente'].includes(String(req.query.orden)) ? String(req.query.orden) : 'monto';
+    const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : '';
+    await asegurarEsquemaClientes();
+    const data = await clientesPorGrupo(sql, { ...periodo, grupo, page, pageSize, orden, q });
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1310,6 +1328,13 @@ router.get('/:id', async (req, res) => {
     const pedidoObj = { ...pedido[0], productos: productosMapeados, total };
     await attachAjustesToPedidos([pedidoObj]);
     await attachCuponesToPedidos([pedidoObj]);
+    // Fidelización: cuántas veces ha comprado este cliente y cuánto lleva comprado
+    try {
+      pedidoObj.cliente_historial = await historialClienteDePedido(sql, pedidoObj.id);
+    } catch (e) {
+      console.error('No se pudo calcular el historial del cliente:', e && e.message ? e.message : e);
+      pedidoObj.cliente_historial = null;
+    }
     res.json(pedidoObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1346,6 +1371,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
 
   let baseTotal = 0;
   let descuentoCupon = 0;
+  let descuentoMayor = 0;
   const movimientos = [];
   let pagoInserted = null;
 
@@ -1360,6 +1386,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
     }
     const pedido = pedidoRows[0];
     descuentoCupon = pedido.descuento_cupon || 0;
+    descuentoMayor = pedido.descuento_mayor || 0;
     if (pedido.estado === 'Completado') {
       await sql`ROLLBACK`;
       const e = new Error('Pedido ya completado');
@@ -1595,7 +1622,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
   }
 
   // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
-  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: descuentoCupon }];
+  const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: descuentoCupon, descuento_mayor: descuentoMayor }];
   await attachAjustesToPedidos(resumen);
   const enriched = resumen[0];
 
@@ -1888,8 +1915,9 @@ router.post('/:id/items', async (req, res) => {
 
     await sql`COMMIT`;
 
-    // El cupón también aplica a los productos agregados: recalcular su descuento
+    // El cupón (o el descuento al mayor) también aplica a los productos agregados: recalcularlo
     await recalcularDescuentoCupon(pedidoId);
+    await recalcularDescuentoMayor(pedidoId);
 
     // devolver pedido actualizado (reutilizar lógica de GET /:id)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
@@ -1933,6 +1961,22 @@ router.post('/:id/items', async (req, res) => {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error agregando items al pedido:', err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Quitar o volver a aplicar el descuento al mayor de un pedido (p. ej. el cliente paga con Cashea)
+router.put('/:id/descuento-mayor', async (req, res) => {
+  if (typeof req.body?.aplicar !== 'boolean') {
+    return res.status(400).json({ error: 'Indica si el descuento al mayor se aplica (true) o se quita (false)' });
+  }
+  try {
+    const resultado = await cambiarDescuentoMayorPedido(req.params.id, req.body.aplicar);
+    if (!resultado.ok) return res.status(resultado.status || 400).json({ error: resultado.error });
+    const { ok, ...datos } = resultado;
+    return res.json(datos);
+  } catch (err) {
+    console.error('Error cambiando descuento al mayor del pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo cambiar el descuento al mayor' });
   }
 });
 
@@ -2001,7 +2045,7 @@ router.put('/:id/ajustes', async (req, res) => {
       await sql`COMMIT`;
 
       // El descuento del cupón debe entrar en los totales devueltos, igual que al consultar el pedido
-      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: pedido.descuento_cupon || 0 }];
+      const resumen = [{ id: pedidoId, total: baseTotal, total_base: baseTotal, descuento_cupon: pedido.descuento_cupon || 0, descuento_mayor: pedido.descuento_mayor || 0 }];
       await attachAjustesToPedidos(resumen);
       const enriched = resumen[0];
 
@@ -2521,8 +2565,9 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
     }
     await sql`COMMIT`;
 
-    // Con menos productos, el descuento del cupón también baja
+    // Con menos productos, el descuento del cupón (o al mayor) también baja
     await recalcularDescuentoCupon(pedidoId);
+    await recalcularDescuentoMayor(pedidoId);
 
     // Devolver pedido actualizado (reusar consulta de detalle)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;

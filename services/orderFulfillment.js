@@ -31,9 +31,19 @@ function normalizeOrderFulfillment(input) {
     if (agencyCode.length > 100 || agencyAddress.length > 500) {
       return { error: 'El código o la dirección de la agencia son demasiado largos' };
     }
+    // Estado y ciudad de destino (para saber desde dónde nos compran).
+    // Son opcionales aquí para no rechazar pedidos de páginas viejas guardadas en el teléfono;
+    // la tienda los pide como obligatorios.
+    const destinationState = String(input.estado || '').trim();
+    const destinationCity = String(input.ciudad || '').trim();
+    if (destinationState.length > 100 || destinationCity.length > 100) {
+      return { error: 'El estado o la ciudad son demasiado largos' };
+    }
     return {
       value: {
         tipo: type,
+        ...(destinationState ? { estado: destinationState } : {}),
+        ...(destinationCity ? { ciudad: destinationCity } : {}),
         transportista: carrier,
         ...(carrier === 'OTRA' ? { transportista_otro: otherCarrier } : {}),
         ...(agencyCode ? { agencia_codigo: agencyCode } : {}),

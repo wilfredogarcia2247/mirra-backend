@@ -24,6 +24,8 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
         cliente: row.nombre_cliente || 'Cliente sin nombre',
         tasa: Number(row.tasa_cambio_monto) > 0 ? Number(row.tasa_cambio_monto) : null,
         descuentoCupon: roundCurrency(row.descuento_cupon),
+        descuentoMayor: roundCurrency(row.descuento_mayor),
+        descuentoMayorPorcentaje: Number(row.descuento_mayor_porcentaje) > 0 ? Number(row.descuento_mayor_porcentaje) : null,
         cuponCodigo: row.cupon_codigo || null,
         subtotal: 0,
         ajustes: [],
@@ -64,7 +66,7 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
     const recargos = roundCurrency(order.ajustes
       .filter((adjustment) => adjustment.tipo === 'recargo')
       .reduce((sum, adjustment) => sum + adjustment.monto_usd, 0));
-    const descuentos = roundCurrency(descuentosAjustes + order.descuentoCupon);
+    const descuentos = roundCurrency(descuentosAjustes + order.descuentoCupon + order.descuentoMayor);
     const total = Math.max(0, roundCurrency(order.subtotal - descuentos + recargos));
 
     return {
@@ -75,12 +77,15 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
       tasa_cambio: order.tasa,
       subtotal_usd: order.subtotal,
       descuento_cupon_usd: order.descuentoCupon,
+      descuento_mayor_usd: order.descuentoMayor,
+      descuento_mayor_porcentaje: order.descuentoMayorPorcentaje,
       descuentos_ajustes_usd: descuentosAjustes,
       descuentos_usd: descuentos,
       recargos_usd: recargos,
       total_usd: total,
       subtotal_bs: order.tasa == null ? null : roundCurrency(order.subtotal * order.tasa),
       descuento_cupon_bs: order.tasa == null ? null : roundCurrency(order.descuentoCupon * order.tasa),
+      descuento_mayor_bs: order.tasa == null ? null : roundCurrency(order.descuentoMayor * order.tasa),
       descuentos_ajustes_bs: order.tasa == null ? null : roundCurrency(descuentosAjustes * order.tasa),
       descuentos_bs: order.tasa == null ? null : roundCurrency(descuentos * order.tasa),
       recargos_bs: order.tasa == null ? null : roundCurrency(recargos * order.tasa),
@@ -102,12 +107,14 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
     resumen: {
       subtotal_usd: sumOrders('subtotal_usd'),
       descuento_cupon_usd: sumOrders('descuento_cupon_usd'),
+      descuento_mayor_usd: sumOrders('descuento_mayor_usd'),
       descuentos_ajustes_usd: sumOrders('descuentos_ajustes_usd'),
       descuentos_usd: sumOrders('descuentos_usd'),
       recargos_usd: sumOrders('recargos_usd'),
       total_usd: sumOrders('total_usd'),
       subtotal_bs: sumBolivares('subtotal_bs'),
       descuento_cupon_bs: sumBolivares('descuento_cupon_bs'),
+      descuento_mayor_bs: sumBolivares('descuento_mayor_bs'),
       descuentos_ajustes_bs: sumBolivares('descuentos_ajustes_bs'),
       descuentos_bs: sumBolivares('descuentos_bs'),
       recargos_bs: sumBolivares('recargos_bs'),
