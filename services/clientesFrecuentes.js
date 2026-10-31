@@ -230,6 +230,11 @@ async function estadisticasRecompra(sql, { fechaInicio = '', fechaFin = '' } = {
            AND EXISTS (SELECT 1 FROM en_periodo e WHERE e.cliente_key = a.cliente_key AND e.n_compra = 1))::int AS nuevos_que_volvieron,
         (SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (fecha - fecha_anterior)) / 86400)
            FROM en_periodo WHERE n_compra = 2) AS dias_segunda_compra,
+        -- Clientes que ya habían comprado ANTES del periodo: cuántos volvieron y cuántos no.
+        -- Sin fecha de inicio ("Todo") no hay un antes: "no volvieron" = compraron una sola vez.
+        (SELECT COUNT(*) FROM historico WHERE NULLIF($2, '') IS NOT NULL AND primera_compra < NULLIF($2, '')::date)::int AS clientes_anteriores,
+        (SELECT COUNT(*) FROM activos WHERE NULLIF($2, '') IS NOT NULL AND primera_compra < NULLIF($2, '')::date)::int AS anteriores_volvieron,
+        (SELECT COUNT(*) FROM historico WHERE compras = 1)::int AS clientes_una_compra,
         (SELECT COALESCE(SUM(compras), 0) FROM historico)::int AS pedidos_historicos,
         (SELECT COUNT(*) FROM historico)::int AS clientes_historicos
     `, params),
@@ -282,6 +287,22 @@ async function estadisticasRecompra(sql, { fechaInicio = '', fechaFin = '' } = {
     clientes_historicos: Number(r.clientes_historicos || 0),
   };
 
+  // Los 3 grupos de clientes del periodo (no se mezclan):
+  // nuevos (primera compra en el periodo), volvieron (ya eran clientes y compraron otra vez)
+  // y no volvieron (ya eran clientes y no compraron en el periodo).
+  // Con "Todo" no hay un antes: volvieron = 2 compras o más, no volvieron = una sola compra.
+  const conInicio = Boolean(fechaInicio);
+  const volvieron = conInicio ? Number(r.anteriores_volvieron || 0) : resumen.clientes_historicos - Number(r.clientes_una_compra || 0);
+  const noVolvieron = conInicio ? Number(r.clientes_anteriores || 0) - volvieron : Number(r.clientes_una_compra || 0);
+  resumen.grupos_clientes = {
+    modo: conInicio ? 'periodo' : 'todo',
+    nuevos: conInicio ? resumen.clientes_nuevos : 0,
+    volvieron,
+    no_volvieron: noVolvieron,
+    // De los clientes que ya teníamos, qué parte volvió a comprar
+    porcentaje_volvieron: pct(volvieron, volvieron + noVolvieron),
+  };
+
   const meses = (mesesRows || []).map((m) => {
     const nuevos = Number(m.pedidos_nuevos || 0);
     const recompra = Number(m.pedidos_recompra || 0);
@@ -327,21 +348,51 @@ async function estadisticasRecompra(sql, { fechaInicio = '', fechaFin = '' } = {
   return { resumen, meses, grupos };
 }
 
-// Lista paginada de los clientes de un grupo (o todos / 2+), con sus últimas compras.
-async function clientesPorGrupo(sql, { fechaInicio = '', fechaFin = '', grupo = 'todos', page = 1, pageSize = 20, orden = 'monto', q = '' } = {}) {
+// Filtro de la lista "no volvieron" por tiempo sin comprar (días desde su última compra)
+const INACTIVIDADES = ['todos', 'hasta60', '60-90', '90+'];
+
+// Lista paginada de los clientes de un grupo (o todos / 2+ / no_volvieron), con sus últimas compras.
+// "no_volvieron": ya habían comprado antes del periodo y no compraron en él
+// (sin fecha de inicio: clientes que compraron una sola vez).
+async function clientesPorGrupo(sql, { fechaInicio = '', fechaFin = '', grupo = 'todos', page = 1, pageSize = 20, orden = 'monto', q = '', inactividad = 'todos' } = {}) {
   const ordenSql = orden === 'compras'
     ? 'compras DESC, monto DESC'
     : orden === 'reciente' ? 'ultima_compra DESC' : 'monto DESC, compras DESC';
   const offset = (page - 1) * pageSize;
   const busqueda = String(q || '').trim();
   const busquedaDigitos = busqueda.replace(/[^0-9]/g, '');
-  const params = [ESTADOS_COMPLETADOS, fechaInicio, fechaFin, grupo, busqueda, busquedaDigitos, pageSize, offset];
+  const filtroDias = INACTIVIDADES.includes(inactividad) ? inactividad : 'todos';
+  const params = [ESTADOS_COMPLETADOS, fechaInicio, fechaFin, grupo, busqueda, busquedaDigitos, pageSize, offset, filtroDias];
 
   const rows = await sql.query(`
     WITH ${RECOMPRA_CTES},
+    base AS (
+      SELECT a.cliente_key, a.compras, a.monto, a.primera_compra, a.ultima_compra, a.nombre, a.cedula, a.telefono,
+             a.grupo, a.compras_periodo, a.monto_periodo
+      FROM activos a
+      WHERE $4 <> 'no_volvieron'
+      UNION ALL
+      SELECT h.cliente_key, h.compras, h.monto, h.primera_compra, h.ultima_compra, h.nombre, h.cedula, h.telefono,
+             'no_volvieron' AS grupo, 0 AS compras_periodo, 0 AS monto_periodo
+      FROM historico h
+      WHERE $4 = 'no_volvieron'
+        AND CASE
+          WHEN NULLIF($2, '') IS NULL THEN h.compras = 1
+          ELSE h.primera_compra < NULLIF($2, '')::date
+               AND NOT EXISTS (SELECT 1 FROM en_periodo e WHERE e.cliente_key = h.cliente_key)
+        END
+    ),
+    con_dias AS (
+      SELECT b.*, GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'America/Caracas') - b.ultima_compra)) / 86400))::int AS dias_sin_comprar
+      FROM base b
+    ),
     filtrados AS (
-      SELECT * FROM activos
-      WHERE ($4 = 'todos' OR ($4 = '2+' AND compras >= 2) OR grupo = $4)
+      SELECT * FROM con_dias
+      WHERE ($4 IN ('todos', 'no_volvieron') OR ($4 = '2+' AND compras >= 2) OR grupo = $4)
+        AND ($9 = 'todos'
+             OR ($9 = 'hasta60' AND dias_sin_comprar < 60)
+             OR ($9 = '60-90' AND dias_sin_comprar >= 60 AND dias_sin_comprar < 90)
+             OR ($9 = '90+' AND dias_sin_comprar >= 90))
         AND ($5 = '' OR nombre ILIKE '%' || $5 || '%'
              OR ($6 <> '' AND (REGEXP_REPLACE(COALESCE(cedula, ''), '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
                                OR REGEXP_REPLACE(COALESCE(telefono, ''), '[^0-9]', '', 'g') LIKE '%' || $6 || '%')))
@@ -383,6 +434,7 @@ async function clientesPorGrupo(sql, { fechaInicio = '', fechaFin = '', grupo = 
         monto_periodo: redondear(row.monto_periodo),
         primera_compra: row.primera_compra || null,
         ultima_compra: row.ultima_compra || null,
+        dias_sin_comprar: row.dias_sin_comprar == null ? null : Number(row.dias_sin_comprar),
         pedidos_resumen: [],
       };
       porKey.set(row.cliente_key, c);
@@ -400,4 +452,4 @@ async function clientesPorGrupo(sql, { fechaInicio = '', fechaFin = '', grupo = 
   return { total, page, page_size: pageSize, paginas: Math.max(1, Math.ceil(total / pageSize)), data };
 }
 
-module.exports = { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, ESTADOS_COMPLETADOS, GRUPOS };
+module.exports = { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, ESTADOS_COMPLETADOS, GRUPOS, INACTIVIDADES };

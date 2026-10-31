@@ -8,7 +8,7 @@ const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
-const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS } = require('../services/clientesFrecuentes');
+const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -1251,12 +1251,12 @@ router.get('/clientes-recompra', async (req, res) => {
   }
 });
 
-// Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+ o todos), paginado, con búsqueda
+// Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+, todos o no_volvieron), paginado, con búsqueda
 router.get('/clientes-grupo', async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
-    const gruposValidos = ['todos', '2+', ...GRUPOS.map((g) => g.id)];
+    const gruposValidos = ['todos', '2+', 'no_volvieron', ...GRUPOS.map((g) => g.id)];
     const grupo = gruposValidos.includes(String(req.query.grupo)) ? String(req.query.grupo) : 'todos';
     const pageRaw = Number(req.query.page || 1);
     const sizeRaw = Number(req.query.page_size || 20);
@@ -1265,7 +1265,8 @@ router.get('/clientes-grupo', async (req, res) => {
     const orden = ['monto', 'compras', 'reciente'].includes(String(req.query.orden)) ? String(req.query.orden) : 'monto';
     const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : '';
     await asegurarEsquemaClientes();
-    const data = await clientesPorGrupo(sql, { ...periodo, grupo, page, pageSize, orden, q });
+    const inactividad = INACTIVIDADES.includes(String(req.query.inactividad)) ? String(req.query.inactividad) : 'todos';
+    const data = await clientesPorGrupo(sql, { ...periodo, grupo, page, pageSize, orden, q, inactividad });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
