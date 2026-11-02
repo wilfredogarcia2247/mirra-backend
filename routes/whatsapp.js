@@ -1,5 +1,6 @@
 const express = require('express');
 const {
+  WAHA_ACTIVO,
   sendTextMessage,
   getSessionStatus,
   disconnectSession,
@@ -18,6 +19,8 @@ function getSessionFromRequest(req) {
 }
 
 function webhookHandler(req, res) {
+  // Con WhatsApp apagado no aceptamos mensajes entrantes (nadie verifica quién los manda).
+  if (!WAHA_ACTIVO) return res.status(404).json({ ok: false, error: 'No disponible' });
   addIncomingMessage(req.body || {});
   return res.status(200).json({ ok: true });
 }
