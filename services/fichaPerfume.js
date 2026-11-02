@@ -32,12 +32,20 @@ function notas(v) {
   return lista.map((n) => texto(n, 40)).filter(Boolean).slice(0, 12);
 }
 
+// Año de lanzamiento del perfume original (entero razonable o vacío)
+function anioValido(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1800 && n <= new Date().getFullYear() + 1 ? n : null;
+}
+
 // Limpia lo que llega del panel: solo valores conocidos, textos cortos
 function normalizarFicha(body) {
   const b = body || {};
   const n = b.notas || {};
   return {
     inspirado_en: texto(b.inspirado_en, 120) || null,
+    casa: texto(b.casa, 60) || null,
+    anio: anioValido(b.anio),
     notas: { salida: notas(n.salida), corazon: notas(n.corazon), fondo: notas(n.fondo) },
     para: uno(b.para, PARA),
     momento: uno(b.momento, MOMENTO),
