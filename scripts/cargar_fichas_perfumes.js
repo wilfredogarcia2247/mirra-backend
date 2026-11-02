@@ -9,12 +9,15 @@
 //   Si no se encuentra (o hay más de uno con ese nombre), se salta y se informa.
 // - Nunca pisa una ficha ya marcada como revisada en el panel (solo le completa casa y año si los tiene vacíos).
 // - Casa y año de lanzamiento del original salen de scripts/fichas_perfumes_casas.js.
+// - Además carga scripts/fichas_perfumes_produccion.js: 108 perfumes que solo existen en producción
+//   (ids y nombres de producción). Es normal que cada lista tenga "no encontradas" en la otra base.
 // - Todo queda revisada=false: no se ve en la tienda hasta revisarlo en Productos > Ficha.
 require('dotenv').config();
 const { neon } = require('@neondatabase/serverless');
 const datos = require('./fichas_perfumes_datos');
 const nombres = require('./fichas_perfumes_nombres.json');
 const casas = require('./fichas_perfumes_casas');
+const produccion = require('./fichas_perfumes_produccion');
 const { normalizarFicha, asegurarColumnaFicha } = require('../services/fichaPerfume');
 
 const SECO = process.argv.includes('--seco');
@@ -27,8 +30,13 @@ const ESTELA = { s: 'suave', n: 'se_nota', f: 'fuerte' };
 const TEMP = { p: 'primavera', v: 'verano', o: 'otono', i: 'invierno' };
 const lista = (t) => String(t || '').split(',').map((x) => x.trim()).filter(Boolean);
 
-function aFicha(id, [inspirado, salida, corazon, fondo, para, momento, familias, dur, estela, temps]) {
-  const [casa, anio] = casas[id] || [];
+// Todas las fichas a cargar: las de la copia de desarrollo (ids de desarrollo) y las de producción (ids y nombres de producción)
+const entradas = [
+  ...Object.entries(datos).map(([id, fila]) => ({ origen: 'desarrollo', id: Number(id), nombre: nombres[id], fila, casa: casas[id] || [] })),
+  ...Object.entries(produccion).map(([id, e]) => ({ origen: 'produccion', id: Number(id), nombre: e.nombre, fila: e.ficha, casa: e.casa || [] })),
+];
+
+function aFicha([casa, anio], [inspirado, salida, corazon, fondo, para, momento, familias, dur, estela, temps]) {
   return normalizarFicha({
     inspirado_en: inspirado,
     casa,
@@ -46,18 +54,21 @@ function aFicha(id, [inspirado, salida, corazon, fondo, para, momento, familias,
 
 (async () => {
   if (!SECO) await asegurarColumnaFicha();
-  const resumen = { cargadas: 0, ya_revisadas: 0, casa_completada: 0, no_encontradas: [], por_nombre: 0 };
+  const resumen = { cargadas: 0, ya_revisadas: 0, casa_completada: 0, no_encontradas: { desarrollo: [], produccion: [] }, por_nombre: 0, ya_cargadas: new Set() };
   const tieneColumna = (await sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'productos' AND column_name = 'ficha'`).length > 0;
 
-  for (const [idTexto, fila] of Object.entries(datos)) {
-    const id = Number(idTexto);
-    const nombre = nombres[idTexto];
-    let prod = await sql`SELECT id FROM productos WHERE id = ${id} AND UPPER(TRIM(nombre)) = UPPER(TRIM(${nombre})) LIMIT 1`;
+  for (const { origen, id, nombre, fila, casa: casaAnio } of entradas) {
+    // Nombre comparado sin distinguir mayúsculas ni espacios repetidos
+    let prod = await sql`SELECT id FROM productos WHERE id = ${id}
+      AND regexp_replace(UPPER(TRIM(nombre)), '\\s+', ' ', 'g') = regexp_replace(UPPER(TRIM(${nombre})), '\\s+', ' ', 'g') LIMIT 1`;
     if (!prod.length) {
-      prod = await sql`SELECT id FROM productos WHERE UPPER(TRIM(nombre)) = UPPER(TRIM(${nombre}))`;
-      if (prod.length !== 1) { resumen.no_encontradas.push(`${id} ${nombre}`); continue; }
+      prod = await sql`SELECT id FROM productos
+        WHERE regexp_replace(UPPER(TRIM(nombre)), '\\s+', ' ', 'g') = regexp_replace(UPPER(TRIM(${nombre})), '\\s+', ' ', 'g')`;
+      if (prod.length !== 1) { resumen.no_encontradas[origen].push(`${id} ${nombre}`); continue; }
       resumen.por_nombre += 1;
     }
+    if (resumen.ya_cargadas.has(Number(prod[0].id))) continue; // el mismo producto no se carga dos veces
+    resumen.ya_cargadas.add(Number(prod[0].id));
     const destino = Number(prod[0].id);
     if (tieneColumna) {
       const actual = await sql`SELECT ficha FROM productos WHERE id = ${destino}`;
@@ -65,7 +76,7 @@ function aFicha(id, [inspirado, salida, corazon, fondo, para, momento, familias,
       if (ficha?.revisada === true) {
         // Ya revisada: no se pisa; solo se completan casa y año si están vacíos
         resumen.ya_revisadas += 1;
-        const [casa, anio] = casas[idTexto] || [];
+        const [casa, anio] = casaAnio;
         if ((!ficha.casa && casa) || (!ficha.anio && anio)) {
           const completa = normalizarFicha({ ...ficha, casa: ficha.casa || casa, anio: ficha.anio || anio });
           if (!SECO) await sql`UPDATE productos SET ficha = ${JSON.stringify(completa)}::jsonb WHERE id = ${destino}`;
@@ -75,7 +86,7 @@ function aFicha(id, [inspirado, salida, corazon, fondo, para, momento, familias,
       }
     }
     if (!SECO) {
-      await sql`UPDATE productos SET ficha = ${JSON.stringify(aFicha(idTexto, fila))}::jsonb WHERE id = ${destino}`;
+      await sql`UPDATE productos SET ficha = ${JSON.stringify(aFicha(casaAnio, fila))}::jsonb WHERE id = ${destino}`;
     }
     resumen.cargadas += 1;
   }
@@ -85,9 +96,13 @@ function aFicha(id, [inspirado, salida, corazon, fondo, para, momento, familias,
   console.log(`Encontradas por nombre (id distinto): ${resumen.por_nombre}`);
   console.log(`Saltadas porque ya estaban revisadas: ${resumen.ya_revisadas}`);
   console.log(`  - de esas, se les completó casa/año: ${resumen.casa_completada}`);
-  console.log(`No encontradas: ${resumen.no_encontradas.length}`);
-  resumen.no_encontradas.forEach((n) => console.log('  -', n));
-  const baja = Object.entries(datos).filter(([, f]) => !f[10]).map(([id]) => `${id} ${nombres[id]}`);
+  // Es normal que no se encuentren las de la otra base: en producción faltan las retiradas de desarrollo y viceversa
+  for (const origen of ['desarrollo', 'produccion']) {
+    const lista = resumen.no_encontradas[origen];
+    console.log(`No encontradas (lista de ${origen}): ${lista.length}`);
+    lista.forEach((n) => console.log('  -', n));
+  }
+  const baja = entradas.filter((e) => !e.fila[10]).map((e) => `${e.id} ${e.nombre}`);
   console.log(`\nCon pocos datos públicos (revisar con más cuidado): ${baja.length}`);
   baja.forEach((n) => console.log('  -', n));
   process.exit(0);
