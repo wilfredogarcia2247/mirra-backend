@@ -5,6 +5,7 @@ const sql = neon(process.env.DATABASE_URL);
 const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
 const { getAgotadoProductIds } = require('../services/productosAgotados');
+const { faltanSieteMl, avisoSieteMl } = require('../services/minimoSieteMl');
 const {
   normalizeCodigo,
   validarCupon,
@@ -194,6 +195,15 @@ router.post('/', async (req, res) => {
         error: `Producto agotado por el momento: ${(nombres || []).map((n) => n.nombre).join(', ')}. Quítalo del carrito para continuar.`,
         productos_agotados: Array.from(agotados),
       });
+    }
+
+    // Mínimo de 4 perfumes de 7 ml si el pedido no trae ninguno de 30 ml o más (el tamaño sale de la fórmula)
+    const idsFormula = [...new Set(productos.map((p) => Number(p.formula_id)).filter((n) => Number.isInteger(n) && n > 0))];
+    if (idsFormula.length > 0) {
+      const formulas = await sql`SELECT id, nombre FROM formulas WHERE id = ANY(${idsFormula})`;
+      const nombrePorId = new Map((formulas || []).map((f) => [Number(f.id), f.nombre]));
+      const faltan = faltanSieteMl(productos.map((p) => ({ nombre: nombrePorId.get(Number(p.formula_id)), cantidad: p.cantidad })));
+      if (faltan > 0) return res.status(400).json({ error: avisoSieteMl(faltan), faltan_7ml: faltan });
     }
 
     const resolvedCliente = await resolveClienteFromBody(req.body);
