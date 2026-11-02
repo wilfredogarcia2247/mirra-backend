@@ -200,6 +200,20 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// Guardar la ficha del perfume (notas, para quién, momento...). Solo personal con sesión.
+router.put('/:id/ficha', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    const fila = await require('../services/fichaPerfume').guardarFicha(id, req.body);
+    if (!fila) return res.status(404).json({ error: 'Producto no encontrado' });
+    return res.json(fila);
+  } catch (err) {
+    console.error('Error guardando la ficha:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo guardar la ficha' });
+  }
+});
+
 // Actualizar producto
 router.put('/:id', async (req, res) => {
   const error = validarProducto(req.body);

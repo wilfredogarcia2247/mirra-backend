@@ -1,4 +1,5 @@
 const express = require('express');
+const { fichaPublica } = require('../services/fichaPerfume');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
@@ -176,6 +177,8 @@ router.get('/', async (req, res) => {
         categorias: categoriasPorProducto[Number(p.id)] || (categoria ? [categoria] : []),
         marca,
         inventario,
+        // Ficha del perfume (notas, para quién, etc.): solo si está revisada en el panel
+        ficha: fichaPublica(p.ficha),
       };
     })
       // Filtrar solo productos que tengan al menos una fórmula (presentación)

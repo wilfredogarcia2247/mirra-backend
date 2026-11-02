@@ -123,6 +123,9 @@ app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.use('/api/descuento-mayor/activo', require('./routes/descuentoMayorPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
+// Enlace propio por perfume (vista previa para WhatsApp/Instagram): /p/ch-good-girl-33
+app.get('/p/:slug', require('./routes/compartir').paginaCompartir);
+
 // "Avísame cuando llegue": la tienda deja el aviso sin sesión; el panel lo gestiona con sesión (más abajo)
 const avisosLlegadaRoutes = require('./routes/avisosLlegada');
 app.post('/api/avisos-llegada', avisosLlegadaRoutes.crearAvisoPublico);
