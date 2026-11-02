@@ -18,7 +18,9 @@ const corsOptions = {
       'http://localhost:3000'
     ];
     // Permitir si no hay origin (como apps móviles o curl) o si está en la lista
-    if (!origin || allowedOrigins.includes(origin) || origin.includes('mirraperfumeria.com')) {
+    // Solo el dominio real y sus subdominios (antes bastaba con "contener" mirraperfumeria.com)
+    const esDominioMirra = /^https:\/\/([a-z0-9-]+\.)*mirraperfumeria\.com$/i.test(origin || '');
+    if (!origin || allowedOrigins.includes(origin) || esDominioMirra) {
       callback(null, true);
     } else {
       callback(new Error('No permitido por CORS'));
@@ -94,7 +96,16 @@ function authMiddleware(req, res, next) {
 
 // Rutas públicas
 app.use('/api/auth', require('./routes/auth'));
-app.use('/api/clientes', require('./routes/clientes'));
+// Clientes: solo la búsqueda por cédula del checkout es pública.
+// La lista, el resumen y el detalle exigen sesión del personal (no influencers).
+function clientesSoloLookupPublico(req, res, next) {
+  if (req.path === '/lookup' || req.path === '/lookup-or-create') return next();
+  return authMiddleware(req, res, () => {
+    if (req.user?.rol === 'influencer') return res.status(403).json({ error: 'No autorizado' });
+    return next();
+  });
+}
+app.use('/api/clientes', clientesSoloLookupPublico, require('./routes/clientes'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Permitir creación pública de pedidos de venta sin token (POST)
