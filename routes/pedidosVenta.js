@@ -12,7 +12,6 @@ const { historialClienteDePedido, rankingClientes, estadisticasRecompra, cliente
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { asegurarTablaCostos } = require('../services/costosPresentacion');
-const { calcularCashea, asegurarTablaCashea, esFormaCashea, registrarCompraCashea, casheaDePedido, resumenCashea, casheaDelDia } = require('../services/cashea');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -964,8 +963,6 @@ router.get('/cierre-diario', async (req, res) => {
     `;
     const close = buildDailySalesClose(rows, ajustesMap, fecha);
     close.pedidos_historicos_sin_fecha_completado = Number(historyRows?.[0]?.cantidad || 0);
-    // Cashea del día: monto total y monto financiado (la comisión no va en el cierre)
-    try { close.cashea = await casheaDelDia(sql, pedidoIds); } catch (e) { close.cashea = null; }
     return res.json(close);
   } catch (err) {
     console.error('Error generando cierre diario:', err && err.message ? err.message : err);
@@ -1268,7 +1265,6 @@ router.get('/reporte-comparativo', async (req, res) => {
     }
     const conEvolucion = fechaOk(q.ev_inicio) && fechaOk(q.ev_fin);
     await asegurarEsquemaClientes();
-    await asegurarTablaCashea(sql);
     await asegurarTablaCostos();
     const qStart = Date.now();
     const [a, b, evolucion] = await Promise.all([
@@ -1290,21 +1286,9 @@ router.get('/rentabilidad', async (req, res) => {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
     await asegurarEsquemaClientes();
-    await asegurarTablaCashea(sql);
     await asegurarTablaCostos();
     const d = await datosPeriodo(sql, periodo.fechaInicio, periodo.fechaFin);
     res.json({ resumen: d.resumen, presentaciones: d.presentaciones });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Resumen de Cashea para reportes (con comisión). ?fecha_inicio&fecha_fin (AAAA-MM-DD, opcionales)
-router.get('/cashea-resumen', async (req, res) => {
-  try {
-    const periodo = leerPeriodo(req);
-    if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
-    res.json(await resumenCashea(sql, periodo));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2140,43 +2124,6 @@ router.put('/:id/ajustes', async (req, res) => {
 });
 
 // GET /api/pedidos-venta/:id/pagos -> listar pagos asociados a un pedido
-// Registrar una compra con Cashea: la inicial (con su método) y la parte financiada, en un solo paso.
-// Body: { cashea: { monto_total, cuotas, inicial_porcentaje | inicial_monto }, forma_cashea_id,
-//         inicial: { forma_pago_id, banco_id?, monto, referencia?, fecha_transaccion? } | null, fecha_transaccion? }
-router.post('/:id/pagos-cashea', async (req, res) => {
-  const pedidoId = Number(req.params.id);
-  if (!Number.isInteger(pedidoId) || pedidoId <= 0) return res.status(400).json({ error: 'ID inválido' });
-  const body = req.body || {};
-  const calculo = calcularCashea(body.cashea);
-  if (!calculo.ok) return res.status(400).json({ error: calculo.error });
-  const datos = calculo.datos;
-  try {
-    const pedido = await sql`SELECT id, estado FROM pedidos_venta WHERE id = ${pedidoId}`;
-    if (!pedido.length) return res.status(404).json({ error: 'Pedido no encontrado' });
-    if (/^cancelad/i.test(String(pedido[0].estado || '').trim())) return res.status(400).json({ error: 'El pedido está cancelado' });
-    if (body.forma_cashea_id == null || !(await esFormaCashea(sql, body.forma_cashea_id))) {
-      return res.status(400).json({ error: 'Falta la forma de pago "Cashea" (créala en Formas de pago)' });
-    }
-    let inicial = null;
-    if (datos.inicial_monto > 0) {
-      inicial = body.inicial || null;
-      const errInicial = inicial ? validarPagoObj(inicial) : 'Indica cómo pagó el cliente la inicial';
-      if (errInicial) return res.status(400).json({ error: errInicial });
-      if (await esFormaCashea(sql, inicial.forma_pago_id)) return res.status(400).json({ error: 'La inicial se paga con otro método, no con Cashea' });
-    }
-    const compra = await registrarCompraCashea(sql, pedidoId, {
-      datos,
-      inicial,
-      casheaPago: { forma_pago_id: Number(body.forma_cashea_id), fecha_transaccion: body.fecha_transaccion || null },
-    });
-    try { await snapshotPaidOrderCommission(pedidoId, sql); } catch (e) { console.error('Comisión influencer tras Cashea:', e.message); }
-    return res.status(201).json({ ok: true, cashea: compra });
-  } catch (err) {
-    console.error('Error registrando compra con Cashea:', err);
-    return res.status(500).json({ error: 'Error registrando el pago con Cashea' });
-  }
-});
-
 router.get('/:id/pagos', async (req, res) => {
   const pedidoId = Number(req.params.id);
   if (isNaN(pedidoId)) return res.status(400).json({ error: 'ID inválido' });
@@ -2192,15 +2139,8 @@ router.get('/:id/pagos', async (req, res) => {
       WHERE p.pedido_venta_id = ${pedidoId}
       ORDER BY p.fecha DESC
     `;
-    // Compras con Cashea: se marcan la parte de Cashea y su inicial (sin comisión)
-    let compras = [];
-    try { compras = await casheaDePedido(sql, pedidoId); } catch (e) { compras = []; }
     const enriched = (rows || []).map((r) => {
-      const compra = compras.find((c) => Number(c.pago_id) === Number(r.id));
-      const deInicial = compras.find((c) => c.pago_inicial_id != null && Number(c.pago_inicial_id) === Number(r.id));
       return {
-        ...(compra ? { cashea: compra } : {}),
-        ...(deInicial ? { cashea_inicial: true } : {}),
         id: r.id,
         pedido_venta_id: r.pedido_venta_id,
         forma_pago_id: r.forma_pago_id,

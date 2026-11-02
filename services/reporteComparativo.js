@@ -107,15 +107,7 @@ async function datosPeriodo(sql, inicio, fin) {
          SELECT 'Descuento al mayor', COUNT(*), SUM(descuento_mayor)
          FROM pedidos WHERE descuento_mayor > 0
          HAVING COUNT(*) > 0
-      ) x) AS cupones,
-      -- Compras con Cashea de estos pedidos (la tabla la crea services/cashea.js antes de esta consulta)
-      (SELECT json_build_object(
-         'pedidos', COUNT(DISTINCT pc.pedido_venta_id),
-         'monto_total', COALESCE(SUM(pc.monto_total), 0),
-         'iniciales', COALESCE(SUM(pc.inicial_monto), 0),
-         'monto_financiado', COALESCE(SUM(pc.monto_financiado), 0),
-         'comision', COALESCE(SUM(pc.monto_financiado * pc.comision_porcentaje / 100), 0))
-       FROM pagos_cashea pc JOIN pedidos p ON p.id = pc.pedido_venta_id) AS cashea
+      ) x) AS cupones
   `, [ESTADOS_COMPLETADOS, inicio, fin]);
 
   const r = rows[0] || {};
@@ -156,13 +148,6 @@ async function datosPeriodo(sql, inicio, fin) {
     estados: lista(r.estados, ['pedidos', 'monto']),
     pagos: lista(r.pagos, ['pedidos']),
     cupones: lista(r.cupones, ['pedidos', 'descuento']),
-    cashea: {
-      pedidos: num(r.cashea?.pedidos),
-      monto_total: dinero(r.cashea?.monto_total),
-      iniciales: dinero(r.cashea?.iniciales),
-      monto_financiado: dinero(r.cashea?.monto_financiado),
-      comision: dinero(r.cashea?.comision),
-    },
   };
 }
 
