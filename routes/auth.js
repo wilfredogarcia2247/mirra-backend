@@ -36,10 +36,15 @@ const MAX_FALLOS = 10;
 const VENTANA_MS = 15 * 60 * 1000;
 const fallosPorIp = new Map();
 
+// req.ip ya trae la IP real: server.js usa 'trust proxy' (1 proxy).
+// No leemos X-Forwarded-For a mano porque el visitante puede inventarlo.
 function ipDe(req) {
-  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return fwd || req.ip || (req.connection && req.connection.remoteAddress) || 'desconocida';
+  return req.ip || (req.socket && req.socket.remoteAddress) || 'desconocida';
 }
+
+// Hash de relleno: si el correo no existe igual se compara una contraseña,
+// así el tiempo de respuesta no delata qué correos existen.
+const HASH_RELLENO = bcrypt.hashSync('relleno-no-es-una-clave', 10);
 
 function estaBloqueada(ip) {
   const r = fallosPorIp.get(ip);
@@ -81,7 +86,8 @@ router.post('/login', async (req, res) => {
   try {
     const usuarios = await sql`SELECT * FROM usuarios WHERE email = ${email}`;
     const usuario = usuarios[0];
-    const valido = usuario ? await bcrypt.compare(password, usuario.password) : false;
+    const coincide = await bcrypt.compare(String(password), usuario ? usuario.password : HASH_RELLENO);
+    const valido = Boolean(usuario) && coincide;
     if (!valido) {
       registrarFallo(ip);
       return res.status(401).json({ error: MENSAJE_FALLO });
