@@ -8,6 +8,8 @@ const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
+const { normalizarEntregaAdmin } = require('../services/entregaPedido');
+const { ensureSucursalesTable } = require('../services/sucursales');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
@@ -2010,6 +2012,37 @@ router.post('/:id/items', async (req, res) => {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error agregando items al pedido:', err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Corregir el método de entrega (tienda / envío nacional / delivery) y sus datos desde el panel.
+// Vale para cualquier estado del pedido. No cambia montos: el cobro de delivery o envío es un recargo aparte.
+router.put('/:id/entrega', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return res.status(400).json({ error: 'ID inválido' });
+  const limpio = normalizarEntregaAdmin(req.body);
+  if (limpio.error) return res.status(400).json({ error: limpio.error });
+  try {
+    let datos = limpio.value;
+    if (datos.tipo === 'tienda') {
+      await ensureSucursalesTable();
+      const filas = await sql`SELECT id, nombre, direccion FROM sucursales WHERE id = ${datos.sucursal_id} LIMIT 1`;
+      if (!filas.length) return res.status(400).json({ error: 'Esa sucursal no existe' });
+      datos = { ...datos, sucursal_nombre: filas[0].nombre, sucursal_direccion: filas[0].direccion };
+    }
+    // Quién y cuándo hizo la última corrección
+    datos = { ...datos, editado_en: new Date().toISOString(), editado_por: req.user?.email || (req.user?.id ? `usuario ${req.user.id}` : null) };
+    const filas = await sql`
+      UPDATE pedidos_venta
+      SET tipo_entrega = ${datos.tipo}, datos_entrega = ${JSON.stringify(datos)}::jsonb
+      WHERE id = ${pedidoId}
+      RETURNING id, tipo_entrega, datos_entrega
+    `;
+    if (!filas.length) return res.status(404).json({ error: 'Pedido no encontrado' });
+    return res.json(filas[0]);
+  } catch (err) {
+    console.error('Error corrigiendo la entrega del pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo guardar la entrega' });
   }
 });
 
