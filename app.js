@@ -123,6 +123,10 @@ app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.use('/api/descuento-mayor/activo', require('./routes/descuentoMayorPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
+// "Avísame cuando llegue": la tienda deja el aviso sin sesión; el panel lo gestiona con sesión (más abajo)
+const avisosLlegadaRoutes = require('./routes/avisosLlegada');
+app.post('/api/avisos-llegada', avisosLlegadaRoutes.crearAvisoPublico);
+
 // Rastreo MRW Venezuela (público — clientes sin cuenta pueden rastrear)
 app.use('/api/mrw', require('./routes/mrw'));
 
@@ -165,6 +169,8 @@ app.use('/api/whatsapp', authMiddleware, whatsappRoutes);
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.use('/api/dashboard', authMiddleware, require('./routes/dashboard'));
+app.use('/api/alertas', authMiddleware, require('./routes/alertas'));
+app.use('/api/avisos-llegada', authMiddleware, avisosLlegadaRoutes);
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');
