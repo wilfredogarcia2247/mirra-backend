@@ -145,7 +145,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
       ContentType: req.file.mimetype,
     }));
 
-    // Copia pequeña para las cintas de la portada. Si falla, la subida sigue igual
+    // Copia liviana (WebP, mismo tamaño) para las cintas de la portada. Si falla, la subida sigue igual
     // (la tienda usa la foto original cuando no hay miniatura).
     const keyMini = claveMiniatura(key);
     if (keyMini && req.file.mimetype !== 'image/gif') {

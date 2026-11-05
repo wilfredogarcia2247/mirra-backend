@@ -8,7 +8,11 @@ const { resolveClienteFromBody } = require('./clientes');
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
 const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
-const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS } = require('../services/clientesFrecuentes');
+const { normalizarEntregaAdmin } = require('../services/entregaPedido');
+const { ensureSucursalesTable } = require('../services/sucursales');
+const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
+const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
+const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -1251,12 +1255,50 @@ router.get('/clientes-recompra', async (req, res) => {
   }
 });
 
-// Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+ o todos), paginado, con búsqueda
+// Reporte "Cómo vamos": compara el periodo A con el B y trae la evolución mes a mes.
+// ?a_inicio&a_fin&b_inicio&b_fin (obligatorias) &ev_inicio&ev_fin (opcionales), formato AAAA-MM-DD.
+router.get('/reporte-comparativo', async (req, res) => {
+  try {
+    const fechaOk = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim());
+    const q = req.query;
+    if (![q.a_inicio, q.a_fin, q.b_inicio, q.b_fin].every(fechaOk)) {
+      return res.status(400).json({ error: 'Fechas inválidas; use el formato AAAA-MM-DD' });
+    }
+    const conEvolucion = fechaOk(q.ev_inicio) && fechaOk(q.ev_fin);
+    await asegurarEsquemaClientes();
+    const qStart = Date.now();
+    const [a, b, evolucion] = await Promise.all([
+      datosPeriodo(sql, q.a_inicio.trim(), q.a_fin.trim()),
+      datosPeriodo(sql, q.b_inicio.trim(), q.b_fin.trim()),
+      conEvolucion ? evolucionMensual(sql, q.ev_inicio.trim(), q.ev_fin.trim()) : Promise.resolve([]),
+    ]);
+    logQueryTime('pedidosVenta.reporteComparativo', qStart, `pedidos=${a.resumen.pedidos}/${b.resumen.pedidos}`);
+    res.json({ a, b, evolucion });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rentabilidad: ventas, costos (de la venta o de Fórmulas) y ganancia del periodo, total y por tamaño.
+// Mismo cálculo que "Cómo vamos". ?fecha_inicio&fecha_fin (AAAA-MM-DD, opcionales)
+router.get('/rentabilidad', async (req, res) => {
+  try {
+    const periodo = leerPeriodo(req);
+    if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
+    await asegurarEsquemaClientes();
+    const d = await datosPeriodo(sql, periodo.fechaInicio, periodo.fechaFin);
+    res.json({ resumen: d.resumen, presentaciones: d.presentaciones });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+, todos o no_volvieron), paginado, con búsqueda
 router.get('/clientes-grupo', async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
-    const gruposValidos = ['todos', '2+', ...GRUPOS.map((g) => g.id)];
+    const gruposValidos = ['todos', '2+', 'no_volvieron', ...GRUPOS.map((g) => g.id)];
     const grupo = gruposValidos.includes(String(req.query.grupo)) ? String(req.query.grupo) : 'todos';
     const pageRaw = Number(req.query.page || 1);
     const sizeRaw = Number(req.query.page_size || 20);
@@ -1265,7 +1307,8 @@ router.get('/clientes-grupo', async (req, res) => {
     const orden = ['monto', 'compras', 'reciente'].includes(String(req.query.orden)) ? String(req.query.orden) : 'monto';
     const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : '';
     await asegurarEsquemaClientes();
-    const data = await clientesPorGrupo(sql, { ...periodo, grupo, page, pageSize, orden, q });
+    const inactividad = INACTIVIDADES.includes(String(req.query.inactividad)) ? String(req.query.inactividad) : 'todos';
+    const data = await clientesPorGrupo(sql, { ...periodo, grupo, page, pageSize, orden, q, inactividad });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1421,7 +1464,12 @@ async function completarPedidoTransaccional(pedidoId, options) {
           const produced = (prodRes && prodRes[0] && Number(prodRes[0].produced)) || 0;
           if (produced < qtyNeeded) {
             await sql`ROLLBACK`;
-            const e = new Error(`Producto ${linea.producto_id} no producido suficiente (${produced}/${qtyNeeded})`);
+            let nombre = `producto #${linea.producto_id}`;
+            try {
+              const n = await sql`SELECT nombre FROM productos WHERE id = ${linea.producto_id}`;
+              if (n[0]?.nombre) nombre = n[0].nombre;
+            } catch (eNombre) { /* se usa el número */ }
+            const e = new Error(`Falta producir ${nombre} (listos ${produced} de ${qtyNeeded})`);
             e.code = 'NOT_PRODUCED';
             throw e;
           }
@@ -1506,7 +1554,7 @@ async function completarPedidoTransaccional(pedidoId, options) {
 
       if (qtyNeeded > 0) {
         await sql`ROLLBACK`;
-        const e = new Error(`Stock insuficiente para producto ${linea.producto_id}`);
+        const e = new Error(`No hay suficiente ${await nombreProducto(sql, linea.producto_id)} en inventario para completar el pedido`);
         e.code = 'INSUFFICIENT_STOCK';
         throw e;
       }
@@ -1961,6 +2009,37 @@ router.post('/:id/items', async (req, res) => {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error agregando items al pedido:', err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Corregir el método de entrega (tienda / envío nacional / delivery) y sus datos desde el panel.
+// Vale para cualquier estado del pedido. No cambia montos: el cobro de delivery o envío es un recargo aparte.
+router.put('/:id/entrega', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return res.status(400).json({ error: 'ID inválido' });
+  const limpio = normalizarEntregaAdmin(req.body);
+  if (limpio.error) return res.status(400).json({ error: limpio.error });
+  try {
+    let datos = limpio.value;
+    if (datos.tipo === 'tienda') {
+      await ensureSucursalesTable();
+      const filas = await sql`SELECT id, nombre, direccion FROM sucursales WHERE id = ${datos.sucursal_id} LIMIT 1`;
+      if (!filas.length) return res.status(400).json({ error: 'Esa sucursal no existe' });
+      datos = { ...datos, sucursal_nombre: filas[0].nombre, sucursal_direccion: filas[0].direccion };
+    }
+    // Quién y cuándo hizo la última corrección
+    datos = { ...datos, editado_en: new Date().toISOString(), editado_por: req.user?.email || (req.user?.id ? `usuario ${req.user.id}` : null) };
+    const filas = await sql`
+      UPDATE pedidos_venta
+      SET tipo_entrega = ${datos.tipo}, datos_entrega = ${JSON.stringify(datos)}::jsonb
+      WHERE id = ${pedidoId}
+      RETURNING id, tipo_entrega, datos_entrega
+    `;
+    if (!filas.length) return res.status(404).json({ error: 'Pedido no encontrado' });
+    return res.json(filas[0]);
+  } catch (err) {
+    console.error('Error corrigiendo la entrega del pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo guardar la entrega' });
   }
 });
 
@@ -2700,7 +2779,7 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
           }
 
           if (totalAvailable < required) {
-            throw new Error(`Materia prima ${comp.materia_prima_id} insuficiente (necesita ${required}, disponible ${totalAvailable})`);
+            throw new Error(await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: orden.producto_terminado_id, formulaId: orden.formula_id, materiaPrimaId: comp.materia_prima_id, requerido: required, disponible: totalAvailable }));
           }
 
           for (const inv of mpInventarios) {
@@ -2735,7 +2814,7 @@ router.post('/:id/completar-todo-atomico', async (req, res) => {
             `;
 
             if (!consumed || consumed.length === 0) {
-              throw new Error(`Inventario insuficiente para materia prima ${update.materia_prima_id} en orden ${orden.id}`);
+              throw new Error(await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: orden.producto_terminado_id, formulaId: orden.formula_id, materiaPrimaId: update.materia_prima_id }));
             }
           }
 

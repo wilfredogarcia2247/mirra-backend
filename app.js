@@ -18,7 +18,9 @@ const corsOptions = {
       'http://localhost:3000'
     ];
     // Permitir si no hay origin (como apps móviles o curl) o si está en la lista
-    if (!origin || allowedOrigins.includes(origin) || origin.includes('mirraperfumeria.com')) {
+    // Solo el dominio real y sus subdominios (antes bastaba con "contener" mirraperfumeria.com)
+    const esDominioMirra = /^https:\/\/([a-z0-9-]+\.)*mirraperfumeria\.com$/i.test(origin || '');
+    if (!origin || allowedOrigins.includes(origin) || esDominioMirra) {
       callback(null, true);
     } else {
       callback(new Error('No permitido por CORS'));
@@ -94,7 +96,16 @@ function authMiddleware(req, res, next) {
 
 // Rutas públicas
 app.use('/api/auth', require('./routes/auth'));
-app.use('/api/clientes', require('./routes/clientes'));
+// Clientes: solo la búsqueda por cédula del checkout es pública.
+// La lista, el resumen y el detalle exigen sesión del personal (no influencers).
+function clientesSoloLookupPublico(req, res, next) {
+  if (req.path === '/lookup' || req.path === '/lookup-or-create') return next();
+  return authMiddleware(req, res, () => {
+    if (req.user?.rol === 'influencer') return res.status(403).json({ error: 'No autorizado' });
+    return next();
+  });
+}
+app.use('/api/clientes', clientesSoloLookupPublico, require('./routes/clientes'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Permitir creación pública de pedidos de venta sin token (POST)
@@ -111,6 +122,13 @@ app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.use('/api/descuento-mayor/activo', require('./routes/descuentoMayorPublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
+
+// Enlace propio por perfume (vista previa para WhatsApp/Instagram): /p/ch-good-girl-33
+app.get('/p/:slug', require('./routes/compartir').paginaCompartir);
+
+// "Avísame cuando llegue": la tienda deja el aviso sin sesión; el panel lo gestiona con sesión (más abajo)
+const avisosLlegadaRoutes = require('./routes/avisosLlegada');
+app.post('/api/avisos-llegada', avisosLlegadaRoutes.crearAvisoPublico);
 
 // Rastreo MRW Venezuela (público — clientes sin cuenta pueden rastrear)
 app.use('/api/mrw', require('./routes/mrw'));
@@ -153,6 +171,8 @@ app.use('/api/whatsapp', authMiddleware, whatsappRoutes);
 // Nota: tamaños removidos — las presentaciones se manejan ahora vía `formulas`.
 
 app.use('/api/dashboard', authMiddleware, require('./routes/dashboard'));
+app.use('/api/alertas', authMiddleware, require('./routes/alertas'));
+app.use('/api/avisos-llegada', authMiddleware, avisosLlegadaRoutes);
 
 app.get('/', (req, res) => {
   res.send('API REST Aromas funcionando');

@@ -2,6 +2,10 @@ const WAHA_BASE_URL = (process.env.WAHA_API_URL || process.env.WHATSAPP_API_URL 
 const WAHA_API_KEY = process.env.WAHA_API_KEY || '';
 const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
 
+// Interruptor general de WhatsApp (WAHA). Apagado salvo que WAHA_ACTIVO=true.
+// Con él apagado no se llama al servidor de WAHA, no se mandan mensajes y el webhook no recibe nada.
+const WAHA_ACTIVO = String(process.env.WAHA_ACTIVO || '').trim().toLowerCase() === 'true';
+
 const recentIncomingMessages = [];
 const MAX_INCOMING_MESSAGES = 100;
 const recentOutboundMessages = [];
@@ -18,6 +22,11 @@ function getHeaders(extra = {}) {
 }
 
 async function callWaha(path, options = {}) {
+  if (!WAHA_ACTIVO) {
+    const err = new Error('WhatsApp (WAHA) está desactivado');
+    err.status = 503;
+    throw err;
+  }
   const { method = 'GET', body } = options;
   const response = await fetch(`${WAHA_BASE_URL}${path}`, {
     method,
@@ -186,6 +195,8 @@ async function ensureSessionStarted(sessionName) {
 }
 
 async function sendTextMessage({ to, text, session, meta }) {
+  // Apagado: no se envía nada y no se considera error (el pedido sigue normal).
+  if (!WAHA_ACTIVO) return { skipped: true, reason: 'WAHA desactivado' };
   const chatId = toChatId(to);
   if (!chatId) throw new Error('Telefono destino invalido para WhatsApp');
   const sessionName = resolveSessionName(session);
@@ -348,6 +359,7 @@ function listOutboundMessages() {
 }
 
 module.exports = {
+  WAHA_ACTIVO,
   WAHA_SESSION,
   sendTextMessage,
   formatOrderSuccessMessage,

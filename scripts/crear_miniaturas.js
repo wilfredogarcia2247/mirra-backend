@@ -1,12 +1,12 @@
 /**
- * Crea las miniaturas (products/mini/*.webp) de las fotos de productos que ya están en MinIO.
+ * Crea las miniaturas (products/cinta/*.webp, mismo tamaño que la original, WebP calidad 90) de las fotos de productos que ya están en MinIO.
  * Las fotos nuevas ya la crean al subirse (routes/imagenes.js); esto es para las anteriores.
  *
  * Uso (desde mirra-backend, con las variables S3_* del entorno que corresponda):
  *   node scripts/crear_miniaturas.js             -> solo muestra qué haría, no escribe nada
  *   node scripts/crear_miniaturas.js --ejecutar  -> crea las miniaturas que faltan
  *
- * Solo agrega archivos nuevos en products/mini/; nunca modifica ni borra las fotos originales.
+ * Solo agrega archivos nuevos en products/cinta/; nunca modifica ni borra las fotos originales.
  * Se puede correr varias veces: salta las miniaturas que ya existen.
  */
 require('dotenv').config();

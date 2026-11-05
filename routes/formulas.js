@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 
 function validarFormula(body) {
   if (!body.producto_terminado_id || isNaN(Number(body.producto_terminado_id)))
@@ -441,7 +442,7 @@ router.post('/:id/produccion', async (req, res) => {
         await sql`ROLLBACK`;
         return res
           .status(400)
-          .json({ error: `Materia prima ${comp.materia_prima_id} insuficiente` });
+          .json({ error: await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: f[0].producto_terminado_id, formulaId: comp.formula_id, materiaPrimaId: comp.materia_prima_id, requerido: required, disponible: totalAvailable }) });
       }
     }
 
@@ -476,7 +477,7 @@ router.post('/:id/produccion', async (req, res) => {
         if (!updatedInv || updatedInv.length === 0) {
           await sql`ROLLBACK`;
           return res.status(400).json({
-            error: `Inventario insuficiente al consumir materia prima id ${comp.materia_prima_id}`,
+            error: await mensajeFaltaMateriaPrima(sql, { productoTerminadoId: f[0].producto_terminado_id, formulaId: comp.formula_id, materiaPrimaId: comp.materia_prima_id }),
           });
         }
         materialesMovidos.push({

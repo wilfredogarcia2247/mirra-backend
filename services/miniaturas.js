@@ -1,38 +1,43 @@
 /**
- * Miniaturas de las fotos de productos.
+ * Fotos livianas para las cintas de la portada.
  *
- * La portada de la tienda muestra las fotos en cuadritos pequeños (cintas), pero las fotos
- * originales pesan ~400 KB cada una. Por cada foto se guarda además una copia pequeña en WebP
- * (~8 KB) junto a la original:
+ * Las fotos originales son PNG de ~400 KB. Por cada foto se guarda además una copia en WebP
+ * del MISMO tamaño en píxeles (no se achica, así se ve igual de nítida en teléfonos y en PC con
+ * zoom) con calidad 90. Pesa ~45 KB en promedio, casi 10 veces menos. Medido el 2026-10-31 con
+ * las 307 fotos del catálogo: a simple vista no se distingue de la original.
  *
- *   products/123-abc-foto.png  ->  products/mini/123-abc-foto.webp
+ *   products/123-abc-foto.png  ->  products/cinta/123-abc-foto.webp
  *
- * La tienda calcula la dirección de la miniatura a partir de la de la foto (sin cambios en la BD)
- * y, si la miniatura no existe todavía, usa la foto original.
+ * Carpeta cinta/ (antes mini/, con fotos de 320 px que se veían borrosas): con un nombre nuevo
+ * los navegadores no reutilizan las miniaturas viejas que guardaron por un año.
+ * La tienda calcula la dirección a partir de la de la foto (sin cambios en la BD)
+ * y, si la copia no existe todavía, usa la foto original.
  */
 const sharp = require('sharp');
 
-// 320 px de ancho: nítida en los cuadritos de la cinta incluso en pantallas de alta densidad
-const ANCHO = 320;
-const CALIDAD = 72;
+// Solo se achican fotos enormes (más de 1000 px); las del catálogo (~700 x 550) quedan igual.
+const LADO_MAXIMO = 1000;
+const CALIDAD = 90;
 const CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const CARPETA = 'cinta';
 
-/** products/x/foto.png -> products/x/mini/foto.webp (null si ya es una miniatura) */
+/** products/x/foto.png -> products/x/cinta/foto.webp (null si ya es una copia, nueva o vieja) */
 function claveMiniatura(key) {
-  if (!key || /(^|\/)mini\//.test(key)) return null;
+  if (!key || /(^|\/)(mini|cinta)\//.test(key)) return null;
   const barra = key.lastIndexOf('/');
   const carpeta = key.slice(0, barra + 1);
   const archivo = key.slice(barra + 1).replace(/\.[^.]+$/, '');
-  return `${carpeta}mini/${archivo}.webp`;
+  return `${carpeta}${CARPETA}/${archivo}.webp`;
 }
 
-/** Devuelve la miniatura WebP de una imagen (Buffer). */
+/** Devuelve la copia WebP de una imagen (Buffer). */
 function crearMiniatura(buffer) {
   return sharp(buffer, { failOn: 'none' })
     .rotate() // respeta la orientación de fotos tomadas con el celular
-    .resize({ width: ANCHO, withoutEnlargement: true })
-    .webp({ quality: CALIDAD })
+    .resize({ width: LADO_MAXIMO, height: LADO_MAXIMO, fit: 'inside', withoutEnlargement: true })
+    // smartSubsample: conserva mejor los bordes de colores (las barras de notas olfativas)
+    .webp({ quality: CALIDAD, smartSubsample: true })
     .toBuffer();
 }
 
-module.exports = { claveMiniatura, crearMiniatura, CACHE_CONTROL, ANCHO };
+module.exports = { claveMiniatura, crearMiniatura, CACHE_CONTROL, LADO_MAXIMO };
