@@ -1279,7 +1279,7 @@ router.get('/reporte-comparativo', async (req, res) => {
   }
 });
 
-// Rentabilidad: ventas, costos (costos por presentación) y ganancia del periodo, total y por tamaño.
+// Rentabilidad: ventas, costos (de la venta o de Fórmulas) y ganancia del periodo, total y por tamaño.
 // Mismo cálculo que "Cómo vamos". ?fecha_inicio&fecha_fin (AAAA-MM-DD, opcionales)
 router.get('/rentabilidad', async (req, res) => {
   try {

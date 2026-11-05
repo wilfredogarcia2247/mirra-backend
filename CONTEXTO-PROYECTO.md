@@ -47,7 +47,7 @@ Este mismo archivo está en los dos repositorios (mirra-backend y mirra-perfumer
 - Hay costo en `formulas.costo` (por presentación), `productos.costo` (materia prima), `ingredientes.costo` y `pedido_venta_productos.costo_unitario` (copia al vender).
 - En pruebas **todo vale 0**: 672 fórmulas, 227 materias primas e `ingredientes` vacía. Solo 59 de 375 líneas vendidas tienen costo guardado.
 - La pantalla de fórmulas (`Formulas.tsx`) **recalcula costo y precio con los costos de los ingredientes** al cambiar componentes. Con ingredientes en 0, los deja en 0.
-- Los reportes de ganancia (Cómo vamos, Rentabilidad) usan el costo guardado en la venta y, si falta, `formulas.costo`. La tabla `costos_presentacion` y su pantalla se quitaron el 2026-11-04 (el código ya no la usa ni la crea; puede seguir existiendo en la base de pruebas). Pendiente: costo masivo por tamaño en Fórmulas, igual que el precio masivo (`PATCH /api/formulas/by-like`).
+- Los reportes de ganancia (Cómo vamos, Rentabilidad) usan el costo guardado en la venta y, si falta, `formulas.costo`. La tabla `costos_presentacion` y su pantalla se quitaron el 2026-11-04 (el código ya no la usa ni la crea; también se borró de la base de pruebas, estaba vacía). Pendiente: costo masivo por tamaño en Fórmulas, igual que el precio masivo (`PATCH /api/formulas/by-like`).
 
 ## Base de datos (pruebas, 2026-11-03; filas aproximadas)
 - **productos** (538): perfumes terminados **y** materias primas en la misma tabla (no hay columna tipo). Es terminado si tiene fórmulas (`formulas.producto_terminado_id`), materia prima si aparece en `formula_componentes.materia_prima_id`. Otros campos: `visible_en_catalogo`, `destacado`, `image_url`, `ficha` (jsonb, ficha del perfume), `categoria_id` (viejo).
