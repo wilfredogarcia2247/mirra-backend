@@ -33,19 +33,13 @@ const LINEAS_CTE = `
     SELECT l.*, REPLACE(SUBSTRING(l.nombre_pres FROM '([0-9]+(?:[.,][0-9]+)?)\\s*ml'), ',', '.') AS ml
     FROM lineas l
   ),
-  -- Costo de cada perfume: el especial de ese perfume y tamaño, si no el general del tamaño
-  -- (Finanzas → Costos por presentación), si no el guardado en la venta o en la presentación.
-  -- La tabla costos_presentacion la crea services/costosPresentacion.js antes de esta consulta.
+  -- Costo de cada perfume: el guardado en la venta, si no el de la presentación (Fórmulas).
   lineas_netas AS (
     SELECT l.*,
       CASE WHEN SUM(l.bruto) OVER (PARTITION BY l.pedido_id) > 0
         THEN l.bruto * l.monto_pedido / SUM(l.bruto) OVER (PARTITION BY l.pedido_id)
         ELSE 0 END AS neto,
-      COALESCE(
-        (SELECT c.costo FROM costos_presentacion c WHERE c.producto_id = l.producto_id AND c.ml = NULLIF(l.ml, '')::numeric),
-        (SELECT c.costo FROM costos_presentacion c WHERE c.producto_id = 0 AND c.ml = NULLIF(l.ml, '')::numeric),
-        NULLIF(l.costo_guardado, 0),
-        0) AS costo_u
+      l.costo_guardado AS costo_u
     FROM lineas_ml l
   )`;
 

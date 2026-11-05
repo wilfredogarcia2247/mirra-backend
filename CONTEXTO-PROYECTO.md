@@ -47,7 +47,7 @@ Este mismo archivo está en los dos repositorios (mirra-backend y mirra-perfumer
 - Hay costo en `formulas.costo` (por presentación), `productos.costo` (materia prima), `ingredientes.costo` y `pedido_venta_productos.costo_unitario` (copia al vender).
 - En pruebas **todo vale 0**: 672 fórmulas, 227 materias primas e `ingredientes` vacía. Solo 59 de 375 líneas vendidas tienen costo guardado.
 - La pantalla de fórmulas (`Formulas.tsx`) **recalcula costo y precio con los costos de los ingredientes** al cambiar componentes. Con ingredientes en 0, los deja en 0.
-- Existe además la tabla `costos_presentacion` (costo por tamaño, solo en Ender4, no está en producción). Se está evaluando reemplazarla por guardar el costo en `formulas.costo`, igual que el precio masivo de la pantalla Fórmulas (`PATCH /api/formulas/by-like`).
+- Los reportes de ganancia (Cómo vamos, Rentabilidad) usan el costo guardado en la venta y, si falta, `formulas.costo`. La tabla `costos_presentacion` y su pantalla se quitaron el 2026-11-04 (el código ya no la usa ni la crea; puede seguir existiendo en la base de pruebas). Pendiente: costo masivo por tamaño en Fórmulas, igual que el precio masivo (`PATCH /api/formulas/by-like`).
 
 ## Base de datos (pruebas, 2026-11-03; filas aproximadas)
 - **productos** (538): perfumes terminados **y** materias primas en la misma tabla (no hay columna tipo). Es terminado si tiene fórmulas (`formulas.producto_terminado_id`), materia prima si aparece en `formula_componentes.materia_prima_id`. Otros campos: `visible_en_catalogo`, `destacado`, `image_url`, `ficha` (jsonb, ficha del perfume), `categoria_id` (viejo).
@@ -62,12 +62,12 @@ Este mismo archivo está en los dos repositorios (mirra-backend y mirra-perfumer
 - **pagos**: `pedido_venta_id`, `forma_pago_id`, `banco_id`, `monto`, `referencia`, `tasa`. **formas_pago**, **bancos**, **banco_formas_pago** (datos de pago en jsonb).
 - **tasas_cambio**: una con `activo=true`. Al cambiarla se actualizan los pedidos pendientes sin pago (`services/pendingOrderRateSync.js`).
 - **clientes** (cédula con prefijo V/E; ver arreglo de búsqueda por cédula), **colaboradores** (influencers, `porcentaje_comision`), **cupones**, **cupon_usos** (comisiones), **influencer_comision_pagos**.
-- Otras: **usuarios**, **usuario_modulos**, **sucursales**, **cintillo_mensajes**, **avisos_llegada** ("Avísame cuando llegue"), **descuento_mayor_config**, **costos_presentacion**, **precio_productos** e **ingredientes** (vacías / sin uso).
+- Otras: **usuarios**, **usuario_modulos**, **sucursales**, **cintillo_mensajes**, **avisos_llegada** ("Avísame cuando llegue"), **descuento_mayor_config**, **precio_productos** e **ingredientes** (vacías / sin uso).
 - Fotos: MinIO (`s3.mirraperfumeria.com`), `products/<nombre>`; copias livianas WebP en `products/cinta/` (`services/miniaturas.js`).
 
 ## Frontend (mirra-perfumeria-frontend)
 - React 18 + Vite 5 + TypeScript + Tailwind + componentes shadcn/ui (`src/components/ui`), React Router 6 y React Query.
-- `src/App.tsx`: rutas. **Tienda pública**: `/` y `/categoria/:slug` (`pages/Hero.tsx`), `/about`, `/rastreo`, `/p/:slug`. **Panel** (con sesión y permiso por módulo, `ModuleProtectedRoute`): `/dashboard`, `/productos`, `/formulas`, `/produccion`, `/pedidos`, `/reportes/:tipo`, `/tasas-cambio`, `/costos-presentacion`, `/usuarios`, `/bancos`, `/pagos`, `/admin/marketing/*` (destacados, cupones, descuento-mayor, avisos), `/admin/cintillo`, `/admin/sucursales`, `/influencer`. Rutas `*-preview` solo en desarrollo.
+- `src/App.tsx`: rutas. **Tienda pública**: `/` y `/categoria/:slug` (`pages/Hero.tsx`), `/about`, `/rastreo`, `/p/:slug`. **Panel** (con sesión y permiso por módulo, `ModuleProtectedRoute`): `/dashboard`, `/productos`, `/formulas`, `/produccion`, `/pedidos`, `/reportes/:tipo`, `/tasas-cambio`, `/usuarios`, `/bancos`, `/pagos`, `/admin/marketing/*` (destacados, cupones, descuento-mayor, avisos), `/admin/cintillo`, `/admin/sucursales`, `/influencer`. Rutas `*-preview` solo en desarrollo.
 - `src/integrations/api.ts`: **todas** las llamadas al backend (`apiFetch` con token `jwt_token` de localStorage; con 401 en el panel manda a /login, en la tienda no).
 - Archivos grandes: `pages/Pedidos.tsx` (panel de pedidos: completar, pagos, copiar pedido), `pages/Reportes.tsx` (menú de reportes + `components/*Report.tsx`), `components/CheckoutModal.tsx` (checkout de la tienda → WhatsApp), `pages/Hero.tsx` (tienda), `pages/Formulas.tsx`.
 - `src/lib/`: reglas compartidas con el backend (descuento al mayor, mínimo 7 ml, formato WhatsApp del pedido, catálogo, ficha del perfume).

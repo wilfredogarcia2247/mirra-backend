@@ -13,7 +13,6 @@ const { ensureSucursalesTable } = require('../services/sucursales');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
-const { asegurarTablaCostos } = require('../services/costosPresentacion');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
   asegurarEsquemaDescuentoMayor,
@@ -1267,7 +1266,6 @@ router.get('/reporte-comparativo', async (req, res) => {
     }
     const conEvolucion = fechaOk(q.ev_inicio) && fechaOk(q.ev_fin);
     await asegurarEsquemaClientes();
-    await asegurarTablaCostos();
     const qStart = Date.now();
     const [a, b, evolucion] = await Promise.all([
       datosPeriodo(sql, q.a_inicio.trim(), q.a_fin.trim()),
@@ -1288,7 +1286,6 @@ router.get('/rentabilidad', async (req, res) => {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
     await asegurarEsquemaClientes();
-    await asegurarTablaCostos();
     const d = await datosPeriodo(sql, periodo.fechaInicio, periodo.fechaFin);
     res.json({ resumen: d.resumen, presentaciones: d.presentaciones });
   } catch (err) {
