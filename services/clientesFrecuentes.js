@@ -15,7 +15,7 @@ const CLIENTE_KEY = `
     ELSE 'pedido:' || pv.id::text
   END`;
 
-// Pedidos completados con su monto: productos menos cupón, descuento al mayor y descuentos manuales.
+// Pedidos completados y con pago (las regalías no cuentan) con su monto: productos menos cupón, descuento al mayor y descuentos manuales.
 // Los recargos (delivery, envío) no cuentan como compra. La fecha es la del pago (completado_en) si existe.
 // $1 = lista de estados completados.
 const PEDIDOS_CLIENTE_CTE = `
@@ -48,6 +48,8 @@ const PEDIDOS_CLIENTE_CTE = `
       WHERE pvp.pedido_venta_id = pv.id
     ) l ON TRUE
     WHERE LOWER(TRIM(COALESCE(pv.estado, ''))) = ANY($1)
+      -- Sin ningún pago = regalía: no es una compra (ni para clientes, ni para Cómo vamos o Rentabilidad)
+      AND EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = pv.id AND COALESCE(pg.monto, 0) > 0)
   )`;
 
 const redondear = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;

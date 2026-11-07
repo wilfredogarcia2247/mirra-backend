@@ -11,7 +11,7 @@ function getPresentation(name) {
   return Number.isFinite(milliliters) ? `${milliliters}ml` : 'Sin presentación';
 }
 
-function buildDailySalesClose(rows, adjustmentsByOrder, date) {
+function buildCore(rows, adjustmentsByOrder, date) {
   const ordersById = new Map();
   const presentations = new Map();
 
@@ -28,6 +28,7 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
         descuentoMayorPorcentaje: Number(row.descuento_mayor_porcentaje) > 0 ? Number(row.descuento_mayor_porcentaje) : null,
         cuponCodigo: row.cupon_codigo || null,
         subtotal: 0,
+        unidades: 0,
         ajustes: [],
       });
     }
@@ -36,6 +37,7 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
     const price = Number(row.precio_venta || 0);
     const order = ordersById.get(id);
     order.subtotal += quantity * price;
+    if (row.producto_id != null) order.unidades += quantity;
 
     if (row.producto_id != null) {
       const presentation = getPresentation(row.presentacion_nombre);
@@ -73,6 +75,7 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
       id: order.id,
       fecha: order.fecha,
       cliente: order.cliente,
+      unidades: roundCurrency(order.unidades),
       cupon_codigo: order.cuponCodigo,
       tasa_cambio: order.tasa,
       subtotal_usd: order.subtotal,
@@ -132,4 +135,35 @@ function buildDailySalesClose(rows, adjustmentsByOrder, date) {
   };
 }
 
-module.exports = { buildDailySalesClose, getPresentation, roundCurrency };
+// Un pedido completado sin ningún pago registrado es una regalía: no cuenta como venta
+// (así el cierre cuadra con el dinero que entró), pero se muestra aparte con lo que salió.
+// Solo se toma como regalía si la consulta dice tiene_pago === false.
+function esRegalia(row) {
+  return Boolean(row) && row.tiene_pago === false;
+}
+
+function buildDailySalesClose(rows, adjustmentsByOrder, date) {
+  const ventas = (rows || []).filter((row) => !esRegalia(row));
+  const regaliasRows = (rows || []).filter(esRegalia);
+  const close = buildCore(ventas, adjustmentsByOrder, date);
+  const regalias = buildCore(regaliasRows, adjustmentsByOrder, date);
+  close.regalias = {
+    cantidad_pedidos: regalias.cantidad_pedidos,
+    unidades: roundCurrency(regalias.presentaciones.reduce((sum, p) => sum + p.unidades, 0)),
+    // Lo que habrían valido a precio de venta (solo referencia, no se suma a las ventas)
+    valor_usd: regalias.resumen.total_usd,
+    valor_bs: regalias.resumen.total_bs,
+    presentaciones: regalias.presentaciones,
+    pedidos: regalias.pedidos.map((order) => ({
+      id: order.id,
+      fecha: order.fecha,
+      cliente: order.cliente,
+      unidades: order.unidades,
+      valor_usd: order.total_usd,
+      valor_bs: order.total_bs,
+    })),
+  };
+  return close;
+}
+
+module.exports = { buildDailySalesClose, esRegalia, getPresentation, roundCurrency };

@@ -10,7 +10,7 @@ const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
 const { normalizarEntregaAdmin } = require('../services/entregaPedido');
 const { ensureSucursalesTable } = require('../services/sucursales');
-const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES } = require('../services/clientesFrecuentes');
+const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES, ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
@@ -943,7 +943,9 @@ router.get('/cierre-diario', async (req, res) => {
         pvp.producto_id,
         pvp.cantidad,
         COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta,
-        COALESCE(NULLIF(pvp.formula_nombre, ''), NULLIF(pvp.nombre_producto, ''), prod.nombre, '') AS presentacion_nombre
+        COALESCE(NULLIF(pvp.formula_nombre, ''), NULLIF(pvp.nombre_producto, ''), prod.nombre, '') AS presentacion_nombre,
+        -- Sin ningún pago = regalía: va aparte y no suma a las ventas del día
+        EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = pv.id AND COALESCE(pg.monto, 0) > 0) AS tiene_pago
       FROM pedidos_venta pv
       LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
       LEFT JOIN productos prod ON prod.id = pvp.producto_id
@@ -993,7 +995,8 @@ router.get('/reportes-resumen', async (req, res) => {
         pvp.cantidad,
         COALESCE(pvp.nombre_producto, prod.nombre) AS nombre_producto,
         pvp.formula_nombre,
-        COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
+        COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta,
+        EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = pv.id AND COALESCE(pg.monto, 0) > 0) AS tiene_pago
       FROM pedidos_venta pv
       LEFT JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
       LEFT JOIN productos prod ON prod.id = pvp.producto_id
@@ -1016,6 +1019,8 @@ router.get('/reportes-resumen', async (req, res) => {
           cupon_codigo: row.cupon_codigo || null,
           descuento_cupon: Number(row.descuento_cupon || 0),
           descuento_mayor: Number(row.descuento_mayor || 0),
+          // Completado sin ningún pago: los reportes de ventas lo muestran como regalía, no como venta
+          regalia: ESTADOS_COMPLETADOS.includes(String(row.estado || '').trim().toLowerCase()) && row.tiene_pago === false,
           productos: [],
           total: 0,
         });
@@ -1127,6 +1132,8 @@ router.get('/reportes-presentaciones', async (req, res) => {
         INNER JOIN pedido_venta_productos pvp ON pvp.pedido_venta_id = pv.id
         LEFT JOIN productos prod ON prod.id = pvp.producto_id
         WHERE LOWER(COALESCE(pv.estado, '')) = ANY(${estadosVendidos})
+          -- Las regalías (completados sin pago) no son ventas
+          AND EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = pv.id AND COALESCE(pg.monto, 0) > 0)
           AND (NULLIF(${fechaInicio}, '')::date IS NULL OR pv.fecha >= NULLIF(${fechaInicio}, '')::date)
           AND (NULLIF(${fechaFin}, '')::date IS NULL OR pv.fecha < NULLIF(${fechaFin}, '')::date + INTERVAL '1 day')
       ),
