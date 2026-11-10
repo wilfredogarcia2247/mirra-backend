@@ -83,3 +83,31 @@ describe('daily sales close aggregation', () => {
     expect(getPresentation('Producto sin tamaño')).toBe('Sin presentación');
   });
 });
+
+describe('daily sales close: regalías', () => {
+  test('orders completed without any payment go to regalías, not to sales', () => {
+    const base = { fecha: '2026-11-06T10:00:00', tasa_cambio_monto: 40, descuento_cupon: 0, descuento_mayor: 0 };
+    const rows = [
+      { ...base, pedido_id: 1, nombre_cliente: 'Paga', producto_id: 1, cantidad: 2, precio_venta: 10, presentacion_nombre: 'A 30 ml', tiene_pago: true },
+      { ...base, pedido_id: 2, nombre_cliente: 'Regalo', producto_id: 2, cantidad: 1, precio_venta: 15, presentacion_nombre: 'B 7 ml', tiene_pago: false },
+      { ...base, pedido_id: 2, nombre_cliente: 'Regalo', producto_id: 3, cantidad: 3, precio_venta: 5, presentacion_nombre: 'C 30 ml', tiene_pago: false },
+    ];
+    const close = buildDailySalesClose(rows, new Map(), '2026-11-06');
+
+    expect(close.cantidad_pedidos).toBe(1);
+    expect(close.resumen.total_usd).toBe(20);
+    expect(close.presentaciones).toEqual([{ presentacion: '30ml', unidades: 2 }]);
+
+    expect(close.regalias.cantidad_pedidos).toBe(1);
+    expect(close.regalias.unidades).toBe(4);
+    expect(close.regalias.valor_usd).toBe(30);
+    expect(close.regalias.valor_bs).toBe(1200);
+    expect(close.regalias.presentaciones).toEqual([
+      { presentacion: '7ml', unidades: 1 },
+      { presentacion: '30ml', unidades: 3 },
+    ]);
+    expect(close.regalias.pedidos).toEqual([
+      { id: 2, fecha: base.fecha, cliente: 'Regalo', unidades: 4, valor_usd: 30, valor_bs: 1200 },
+    ]);
+  });
+});

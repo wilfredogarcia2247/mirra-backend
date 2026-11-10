@@ -3,6 +3,11 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { asegurarEsquemaDescuentoMayor } = require('../services/descuentoMayor');
+const { ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
+
+// Mismo criterio que los reportes (Cómo vamos, cierre diario):
+// - Pedido vendido = completado y con al menos un pago (sin pago es regalía y no cuenta).
+// - Fecha de la venta = cuándo se completó (completado_en) o, si no hay, la del pedido.
 
 // GET /api/dashboard/stats
 // Returns all dashboard KPIs + chart data + top products in a single round-trip
@@ -34,8 +39,9 @@ router.get('/stats', async (req, res) => {
                  COALESCE(p.descuento_cupon, 0) + COALESCE(p.descuento_mayor, 0) AS descuento
           FROM pedidos_venta p
           JOIN pedido_venta_productos pv ON pv.pedido_venta_id = p.id
-          WHERE p.estado IN ('Completado','Completada','Finalizado','Finalizada','Entregado','Pagado')
-            AND DATE_TRUNC('month', p.fecha) = DATE_TRUNC('month', CURRENT_DATE)
+          WHERE LOWER(TRIM(COALESCE(p.estado, ''))) = ANY(${ESTADOS_COMPLETADOS})
+            AND EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = p.id AND COALESCE(pg.monto, 0) > 0)
+            AND DATE_TRUNC('month', COALESCE(p.completado_en, p.fecha)) = DATE_TRUNC('month', CURRENT_DATE)
           GROUP BY p.id, p.descuento_cupon, p.descuento_mayor
         )
         SELECT COALESCE(SUM(bruto - descuento), 0) AS total,
@@ -47,14 +53,15 @@ router.get('/stats', async (req, res) => {
       sql`
         WITH ordenes AS (
           SELECT p.id,
-                 p.fecha,
+                 COALESCE(p.completado_en, p.fecha) AS fecha,
                  COALESCE(SUM(pv.cantidad * COALESCE(pv.precio_venta, 0)), 0) AS bruto,
                  COALESCE(p.descuento_cupon, 0) + COALESCE(p.descuento_mayor, 0) AS descuento
           FROM pedidos_venta p
           JOIN pedido_venta_productos pv ON pv.pedido_venta_id = p.id
-          WHERE p.estado IN ('Completado','Completada','Finalizado','Finalizada','Entregado','Pagado')
-            AND p.fecha >= DATE_TRUNC('year', CURRENT_DATE)
-          GROUP BY p.id, p.fecha, p.descuento_cupon, p.descuento_mayor
+          WHERE LOWER(TRIM(COALESCE(p.estado, ''))) = ANY(${ESTADOS_COMPLETADOS})
+            AND EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = p.id AND COALESCE(pg.monto, 0) > 0)
+            AND COALESCE(p.completado_en, p.fecha) >= DATE_TRUNC('year', CURRENT_DATE)
+          GROUP BY p.id, COALESCE(p.completado_en, p.fecha), p.descuento_cupon, p.descuento_mayor
         )
         SELECT
           EXTRACT(MONTH FROM fecha)::int AS mes,
@@ -66,7 +73,7 @@ router.get('/stats', async (req, res) => {
         ORDER BY anio, mes
       `,
 
-      // Top 6 productos más vendidos (por cantidad) en pedidos completados
+      // Top 6 productos más vendidos (por cantidad) del mes en curso
       sql`
         WITH ordenes AS (
           SELECT p.id,
@@ -74,7 +81,9 @@ router.get('/stats', async (req, res) => {
                  COALESCE(p.descuento_cupon, 0) + COALESCE(p.descuento_mayor, 0) AS descuento
           FROM pedidos_venta p
           JOIN pedido_venta_productos pv ON pv.pedido_venta_id = p.id
-          WHERE p.estado IN ('Completado','Completada','Finalizado','Finalizada','Entregado','Pagado')
+          WHERE LOWER(TRIM(COALESCE(p.estado, ''))) = ANY(${ESTADOS_COMPLETADOS})
+            AND EXISTS (SELECT 1 FROM pagos pg WHERE pg.pedido_venta_id = p.id AND COALESCE(pg.monto, 0) > 0)
+            AND DATE_TRUNC('month', COALESCE(p.completado_en, p.fecha)) = DATE_TRUNC('month', CURRENT_DATE)
           GROUP BY p.id, p.descuento_cupon, p.descuento_mayor
         ),
         factor AS (
@@ -90,7 +99,6 @@ router.get('/stats', async (req, res) => {
         JOIN pedido_venta_productos pv ON pv.pedido_venta_id = p.id
         JOIN factor f ON f.id = p.id
         LEFT JOIN productos prod ON prod.id = pv.producto_id
-        WHERE p.estado IN ('Completado','Completada','Finalizado','Finalizada','Entregado','Pagado')
         GROUP BY pv.producto_id, COALESCE(pv.nombre_producto, prod.nombre, 'Desconocido')
         ORDER BY unidades DESC
         LIMIT 6
