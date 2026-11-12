@@ -12,6 +12,7 @@ const { normalizarEntregaAdmin } = require('../services/entregaPedido');
 const { ensureSucursalesTable } = require('../services/sucursales');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES, ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
+const { requierePermiso } = require('../services/permisos');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
@@ -1106,7 +1107,7 @@ router.get('/reportes-entregas', async (req, res) => {
   }
 });
 
-router.get('/reportes-presentaciones', async (req, res) => {
+router.get('/reportes-presentaciones', requierePermiso('rep_ventas_presentacion'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -1207,7 +1208,7 @@ router.get('/reportes-presentaciones', async (req, res) => {
   }
 });
 
-router.get('/clientes-top-resumen', async (req, res) => {
+router.get('/clientes-top-resumen', requierePermiso('rep_clientes'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -1248,7 +1249,7 @@ async function asegurarEsquemaClientes() {
 }
 
 // Recompras: pedidos de clientes nuevos vs. recompras, por mes, y clientes agrupados por veces que compraron
-router.get('/clientes-recompra', async (req, res) => {
+router.get('/clientes-recompra', requierePermiso('rep_clientes'), async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
@@ -1264,7 +1265,7 @@ router.get('/clientes-recompra', async (req, res) => {
 
 // Reporte "Cómo vamos": compara el periodo A con el B y trae la evolución mes a mes.
 // ?a_inicio&a_fin&b_inicio&b_fin (obligatorias) &ev_inicio&ev_fin (opcionales), formato AAAA-MM-DD.
-router.get('/reporte-comparativo', async (req, res) => {
+router.get('/reporte-comparativo', requierePermiso('rep_resumen_general'), async (req, res) => {
   try {
     const fechaOk = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim());
     const q = req.query;
@@ -1288,7 +1289,7 @@ router.get('/reporte-comparativo', async (req, res) => {
 
 // Rentabilidad: ventas, costos (de la venta o de Fórmulas) y ganancia del periodo, total y por tamaño.
 // Mismo cálculo que "Cómo vamos". ?fecha_inicio&fecha_fin (AAAA-MM-DD, opcionales)
-router.get('/rentabilidad', async (req, res) => {
+router.get('/rentabilidad', requierePermiso('rep_rentabilidad'), async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
@@ -1301,7 +1302,7 @@ router.get('/rentabilidad', async (req, res) => {
 });
 
 // Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+, todos o no_volvieron), paginado, con búsqueda
-router.get('/clientes-grupo', async (req, res) => {
+router.get('/clientes-grupo', requierePermiso('rep_clientes'), async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });

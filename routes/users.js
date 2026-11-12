@@ -137,7 +137,26 @@ router.delete('/:id', async (req, res) => {
 const MODULOS = [
   { grupo: 'General', items: [
     { key: 'dashboard', label: 'Dashboard' },
-    { key: 'reportes', label: 'Reportes' },
+  ] },
+  // Un permiso por reporte, en dos grupos: los del día a día de la tienda y los de dinero/clientes.
+  { grupo: 'Reportes de la tienda', items: [
+    { key: 'rep_cierre_diario', label: 'Cierre diario' },
+    { key: 'rep_pedidos_estado', label: 'Pedidos por estado' },
+    { key: 'rep_inventario', label: 'Estado de inventario' },
+    { key: 'rep_rotacion_inventario', label: 'Rotación de inventario' },
+    { key: 'rep_historial_produccion', label: 'Historial de producción' },
+    { key: 'rep_productos_favoritos', label: 'Productos favoritos' },
+    { key: 'rep_compras', label: 'Compras y reposición' },
+    { key: 'rep_entregas', label: 'Entregas y ciudades' },
+  ] },
+  { grupo: 'Reportes de dinero y clientes', items: [
+    { key: 'rep_resumen_general', label: 'Cómo vamos' },
+    { key: 'rep_ventas_periodo', label: 'Ventas por periodo' },
+    { key: 'rep_ventas_metodo', label: 'Ventas por método' },
+    { key: 'rep_ventas_presentacion', label: 'Ventas por presentación' },
+    { key: 'rep_ticket_promedio', label: 'Ticket promedio' },
+    { key: 'rep_rentabilidad', label: 'Rentabilidad' },
+    { key: 'rep_clientes', label: 'Clientes y recompras' },
   ] },
   { grupo: 'Catálogo', items: [
     { key: 'marcas', label: 'Marcas' },
@@ -176,6 +195,11 @@ const PERMISOS_DERIVADOS = {
   almacenes: ['produccion'],
   usuarios: ['destacados', 'cupones', 'descuento_mayor', 'avisos', 'cintillo', 'sucursales'],
 };
+// Versión 3: el permiso general "reportes" se cambia por los reportes de la tienda
+// (los de dinero y clientes quedan apagados hasta que el admin los marque).
+const REPORTES_TIENDA = ['rep_cierre_diario', 'rep_pedidos_estado', 'rep_inventario', 'rep_rotacion_inventario',
+  'rep_historial_produccion', 'rep_productos_favoritos', 'rep_compras', 'rep_entregas'];
+const PERMISOS_VERSION = 3;
 
 let _aseguradoModulos = false;
 async function asegurarUsuarioModulos() {
@@ -212,6 +236,14 @@ async function asegurarUsuarioModulos() {
       if (p[viejo] === true) for (const k of nuevos) p[k] = true;
     }
     await sql`UPDATE usuario_modulos SET permisos = ${JSON.stringify(p)}::jsonb, permisos_version = 2
+              WHERE usuario_id = ${r.usuario_id}`;
+  }
+  const v2 = await sql`SELECT usuario_id, permisos FROM usuario_modulos WHERE permisos_version < 3`;
+  for (const r of v2) {
+    const p = { ...(r.permisos || {}) };
+    if (p.reportes === true) for (const k of REPORTES_TIENDA) p[k] = true;
+    delete p.reportes;
+    await sql`UPDATE usuario_modulos SET permisos = ${JSON.stringify(p)}::jsonb, permisos_version = 3
               WHERE usuario_id = ${r.usuario_id}`;
   }
   _aseguradoModulos = true;
@@ -266,7 +298,7 @@ router.post('/:id/modulos', async (req, res) => {
     await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
     const inserted = await sql`
       INSERT INTO usuario_modulos (usuario_id, permisos, permisos_version, created_at, updated_at)
-      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, 2, NOW(), NOW()) RETURNING *
+      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, ${PERMISOS_VERSION}, NOW(), NOW()) RETURNING *
     `;
     return res.status(201).json(respuestaPermisos(inserted && inserted[0]));
   } catch (err) {
@@ -286,7 +318,7 @@ router.put('/:id/modulos', async (req, res) => {
     await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
     const inserted = await sql`
       INSERT INTO usuario_modulos (usuario_id, permisos, permisos_version, created_at, updated_at)
-      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, 2, NOW(), NOW()) RETURNING *
+      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, ${PERMISOS_VERSION}, NOW(), NOW()) RETURNING *
     `;
     return res.json(respuestaPermisos(inserted && inserted[0]));
   } catch (err) {
