@@ -52,6 +52,12 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Lista de módulos disponibles, agrupados por categoría (para la pantalla de Usuarios).
+// Va antes de '/:id' para que esa ruta no la tape.
+router.get('/available-modulos', (req, res) => {
+  return res.json({ available_modulos: MODULOS_KEYS, grupos: MODULOS });
+});
+
 // GET /api/users/:id -> obtener usuario
 router.get('/:id', async (req, res) => {
   const id = Number(req.params.id);
@@ -125,23 +131,110 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// --- Rutas para gestionar `usuario_modulos` ---
-// Lista de módulos disponibles (metadato para el frontend)
-router.get('/available-modulos', (req, res) => {
-  const available = [
-    'dashboard',
-    'tasas_cambio',
-    'bancos',
-    'marcas',
-    'categorias',
-    'almacenes',
-    'productos',
-    'formulas',
-    'pedidos',
-    'usuarios',
-  ];
-  return res.json({ available_modulos: available });
-});
+// --- Permisos por pantalla (usuario_modulos) ---
+// Fuente única: cada grupo (categoría) con sus pantallas. Para agregar un permiso
+// nuevo en el futuro, basta con añadirlo aquí y usar su `key` en el frontend.
+const MODULOS = [
+  { grupo: 'General', items: [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'reportes', label: 'Reportes' },
+  ] },
+  { grupo: 'Catálogo', items: [
+    { key: 'marcas', label: 'Marcas' },
+    { key: 'categorias', label: 'Categorías' },
+    { key: 'productos', label: 'Productos' },
+    { key: 'formulas', label: 'Fórmulas' },
+  ] },
+  { grupo: 'Operaciones', items: [
+    { key: 'pedidos', label: 'Pedidos' },
+    { key: 'almacenes', label: 'Almacenes' },
+    { key: 'produccion', label: 'Producción' },
+  ] },
+  { grupo: 'Finanzas', items: [
+    { key: 'tasas_cambio', label: 'Tasas de cambio' },
+    { key: 'bancos', label: 'Bancos' },
+    { key: 'pagos', label: 'Pagos' },
+  ] },
+  { grupo: 'Marketing', items: [
+    { key: 'destacados', label: 'Destacados' },
+    { key: 'cupones', label: 'Cupones' },
+    { key: 'descuento_mayor', label: 'Descuento al mayor' },
+    { key: 'avisos', label: 'Clientes esperando' },
+  ] },
+  { grupo: 'Sistema', items: [
+    { key: 'usuarios', label: 'Usuarios' },
+    { key: 'cintillo', label: 'Cintillo' },
+    { key: 'sucursales', label: 'Sucursales' },
+  ] },
+];
+const MODULOS_KEYS = MODULOS.flatMap((g) => g.items.map((i) => i.key));
+// Columnas booleanas del diseño viejo (para migrar una sola vez a la columna `permisos`)
+const MODULOS_VIEJOS = ['dashboard', 'tasas_cambio', 'bancos', 'marcas', 'categorias', 'almacenes', 'productos', 'formulas', 'pedidos', 'usuarios'];
+// Qué pantallas nuevas abría antes cada permiso viejo (se reparten una sola vez)
+const PERMISOS_DERIVADOS = {
+  dashboard: ['reportes'],
+  almacenes: ['produccion'],
+  usuarios: ['destacados', 'cupones', 'descuento_mayor', 'avisos', 'cintillo', 'sucursales'],
+};
+
+let _aseguradoModulos = false;
+async function asegurarUsuarioModulos() {
+  if (_aseguradoModulos) return;
+  await sql`CREATE TABLE IF NOT EXISTS usuario_modulos (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER UNIQUE,
+    permisos jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`;
+  await sql`ALTER TABLE usuario_modulos ADD COLUMN IF NOT EXISTS permisos jsonb NOT NULL DEFAULT '{}'::jsonb`;
+  // Migrar una sola vez: pasar las columnas booleanas viejas al JSON `permisos`
+  try {
+    const rows = await sql`SELECT * FROM usuario_modulos WHERE permisos = '{}'::jsonb OR permisos IS NULL`;
+    for (const r of rows) {
+      const p = {};
+      for (const k of MODULOS_VIEJOS) if (r[k] === true) p[k] = true;
+      if (Object.keys(p).length > 0) {
+        await sql`UPDATE usuario_modulos SET permisos = ${JSON.stringify(p)}::jsonb WHERE usuario_id = ${r.usuario_id}`;
+      }
+    }
+  } catch (e) {
+    // Si no existen las columnas viejas, no hay nada que migrar
+  }
+  // Repartir una sola vez las pantallas nuevas según los permisos que ya tenía cada uno,
+  // para que nadie pierda lo que usaba (antes Reportes iba con Dashboard, Producción con
+  // Almacenes, y Marketing/Cintillo/Sucursales con Usuarios). permisos_version = 2: ya hecho.
+  await sql`ALTER TABLE usuario_modulos ADD COLUMN IF NOT EXISTS permisos_version INTEGER NOT NULL DEFAULT 1`;
+  const pendientes = await sql`SELECT usuario_id, permisos FROM usuario_modulos WHERE permisos_version < 2`;
+  for (const r of pendientes) {
+    const p = { ...(r.permisos || {}) };
+    for (const [viejo, nuevos] of Object.entries(PERMISOS_DERIVADOS)) {
+      if (p[viejo] === true) for (const k of nuevos) p[k] = true;
+    }
+    await sql`UPDATE usuario_modulos SET permisos = ${JSON.stringify(p)}::jsonb, permisos_version = 2
+              WHERE usuario_id = ${r.usuario_id}`;
+  }
+  _aseguradoModulos = true;
+}
+
+// Respuesta al guardar: la fila y la lista de pantallas habilitadas
+function respuestaPermisos(row) {
+  const permisos = (row && row.permisos) || {};
+  return { ...(row || {}), modulos: MODULOS_KEYS.filter((k) => permisos[k] === true) };
+}
+
+// Normaliza el cuerpo recibido a { key: true } solo para keys válidas
+function leerPermisos(body) {
+  const src = (body && (body.modulos !== undefined ? body.modulos : body)) || {};
+  const out = {};
+  if (Array.isArray(src)) {
+    for (const k of src) if (MODULOS_KEYS.includes(k)) out[k] = true;
+  } else if (src && typeof src === 'object') {
+    for (const k of MODULOS_KEYS) if (src[k]) out[k] = true;
+  }
+  return out;
+}
+
 
 // GET /api/users/:id/modulos -> obtener módulos habilitados para un usuario
 router.get('/:id/modulos', async (req, res) => {
@@ -150,29 +243,11 @@ router.get('/:id/modulos', async (req, res) => {
   if (!requireAdminOrSelf(req, res, id)) return;
 
   try {
-    const rows = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-    const available = [
-      'dashboard',
-      'tasas_cambio',
-      'bancos',
-      'marcas',
-      'categorias',
-      'almacenes',
-      'productos',
-      'formulas',
-      'pedidos',
-      'usuarios',
-    ];
-
-    // Si no existe registro, retornar array vacío
-    if (!rows || rows.length === 0) {
-      return res.json({ modulos: [], available_modulos: available });
-    }
-
-    // Filtrar solo los módulos que están en true
-    const modulosHabilitados = available.filter(modulo => rows[0][modulo] === true);
-
-    return res.json({ modulos: modulosHabilitados, available_modulos: available });
+    await asegurarUsuarioModulos();
+    const rows = await sql`SELECT permisos FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
+    const permisos = (rows && rows[0] && rows[0].permisos) || {};
+    const modulosHabilitados = MODULOS_KEYS.filter((k) => permisos[k] === true);
+    return res.json({ modulos: modulosHabilitados, available_modulos: MODULOS_KEYS, grupos: MODULOS });
   } catch (err) {
     console.error('Error leyendo usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error leyendo permisos' });
@@ -184,37 +259,17 @@ router.post('/:id/modulos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-  const allowed = [
-    'dashboard',
-    'tasas_cambio',
-    'bancos',
-    'marcas',
-    'categorias',
-    'almacenes',
-    'productos',
-    'formulas',
-    'pedidos',
-    'usuarios',
-  ];
-  const body = req.body || {};
-  // construir fila completa: si falta un flag, se asume false
-  const row = { usuario_id: id };
-  for (const k of allowed) row[k] = body[k] != null ? !!body[k] : false;
-
+  const permisos = leerPermisos(req.body);
   try {
+    await asegurarUsuarioModulos();
     // eliminar cualquier fila previa y reinsertar (upsert sencillo)
-    await sql`BEGIN`;
     await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
     const inserted = await sql`
-      INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, usuarios, created_at, updated_at)
-      VALUES (
-        ${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, ${row.usuarios}, NOW(), NOW()
-      ) RETURNING *
+      INSERT INTO usuario_modulos (usuario_id, permisos, permisos_version, created_at, updated_at)
+      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, 2, NOW(), NOW()) RETURNING *
     `;
-    await sql`COMMIT`;
-    return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
+    return res.status(201).json(respuestaPermisos(inserted && inserted[0]));
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error guardando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
   }
@@ -225,46 +280,16 @@ router.put('/:id/modulos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-  const allowed = [
-    'dashboard',
-    'tasas_cambio',
-    'bancos',
-    'marcas',
-    'categorias',
-    'almacenes',
-    'productos',
-    'formulas',
-    'pedidos',
-    'usuarios',
-  ];
-  const body = req.body || {};
-  // require at least one field
-  const hasAny = allowed.some((k) => Object.prototype.hasOwnProperty.call(body, k));
-  if (!hasAny) return res.status(400).json({ error: 'Nada para actualizar' });
-  const row = { usuario_id: id };
-  for (const k of allowed) row[k] = body[k] != null ? !!body[k] : false;
+  const permisos = leerPermisos(req.body);
   try {
-    await sql`BEGIN`;
-    const exists = await sql`SELECT id FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-    if (exists && exists.length > 0) {
-      await sql`
-        UPDATE usuario_modulos SET
-          dashboard = ${row.dashboard}, tasas_cambio = ${row.tasas_cambio}, bancos = ${row.bancos}, marcas = ${row.marcas}, categorias = ${row.categorias}, almacenes = ${row.almacenes}, productos = ${row.productos}, formulas = ${row.formulas}, pedidos = ${row.pedidos}, usuarios = ${row.usuarios}, updated_at = NOW()
-        WHERE usuario_id = ${id}
-      `;
-      const updated = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-      await sql`COMMIT`;
-      return res.json(updated && updated[0] ? updated[0] : { ok: true });
-    } else {
-      const inserted = await sql`
-        INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, usuarios, created_at, updated_at)
-        VALUES (${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, ${row.usuarios}, NOW(), NOW()) RETURNING *
-      `;
-      await sql`COMMIT`;
-      return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
-    }
+    await asegurarUsuarioModulos();
+    await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
+    const inserted = await sql`
+      INSERT INTO usuario_modulos (usuario_id, permisos, permisos_version, created_at, updated_at)
+      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, 2, NOW(), NOW()) RETURNING *
+    `;
+    return res.json(respuestaPermisos(inserted && inserted[0]));
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error reemplazando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
   }
