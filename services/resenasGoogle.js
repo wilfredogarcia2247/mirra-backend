@@ -1,9 +1,10 @@
-// Reseñas reales de Google Maps para la página Comunidad.
-// Pide a Google Places API (New) la nota, el total y hasta 5 reseñas de la tienda.
-// Guarda la respuesta en memoria 6 horas para no gastar consultas (Google cobra
-// las reseñas después de 1.000 consultas al mes). No usa la base de datos.
+// Reseñas de Google Maps para la página Comunidad.
+// Pide a Google Places API (New) la nota, el total de reseñas y el resumen que
+// escribe Gemini a partir de ellas. (Google no entrega reseñas sueltas de esta
+// tienda.) Guarda la respuesta en memoria 6 horas para no gastar consultas: Google
+// cobra después de 1.000 consultas al mes. No usa la base de datos.
 // Sin clave (GOOGLE_PLACES_API_KEY) o si Google falla, devuelve null y la tienda
-// muestra la página sin reseñas.
+// muestra la página sin nota ni resumen.
 
 const PLACE_ID = process.env.GOOGLE_PLACE_ID || 'ChIJ2WJPweyZiY4RZst6bom8xx4';
 const SEIS_HORAS = 6 * 60 * 60 * 1000;
@@ -12,27 +13,12 @@ const MEDIA_HORA = 30 * 60 * 1000; // si Google falla, no reintentar antes de es
 let guardado = null; // { datos, vence }
 let enCurso = null;
 
-function limpiarResena(r) {
-  const texto = (r.originalText && r.originalText.text) || (r.text && r.text.text) || '';
-  const autor = r.authorAttribution || {};
-  return {
-    autor: autor.displayName || 'Cliente de Google',
-    autorUrl: autor.uri || null,
-    foto: autor.photoUri || null,
-    estrellas: Number(r.rating) || 0,
-    cuando: r.relativePublishTimeDescription || '',
-    publicada: r.publishTime || null,
-    texto: String(texto).trim(),
-    enlace: r.googleMapsUri || null,
-  };
-}
-
 async function pedirAGoogle(clave) {
   const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(PLACE_ID)}?languageCode=es&regionCode=VE`;
   const resp = await fetch(url, {
     headers: {
       'X-Goog-Api-Key': clave,
-      'X-Goog-FieldMask': 'rating,userRatingCount,reviews,googleMapsUri',
+      'X-Goog-FieldMask': 'rating,userRatingCount,googleMapsUri,reviewSummary',
     },
     signal: AbortSignal.timeout(8000),
   });
@@ -41,11 +27,20 @@ async function pedirAGoogle(clave) {
     throw new Error(`Google respondió ${resp.status}: ${detalle.slice(0, 200)}`);
   }
   const lugar = await resp.json();
+  const sum = lugar.reviewSummary || {};
+  const textoResumen = String((sum.text && sum.text.text) || '').trim();
   return {
     nota: Number(lugar.rating) || null,
     total: Number(lugar.userRatingCount) || 0,
     enlace: lugar.googleMapsUri || null,
-    resenas: (lugar.reviews || []).map(limpiarResena).filter((r) => r.texto && r.estrellas > 0),
+    // Google exige mostrar el aviso ("Resumen de Gemini") y el enlace para reportar
+    resumen: textoResumen
+      ? {
+          texto: textoResumen,
+          aviso: (sum.disclosureText && sum.disclosureText.text) || 'Resumen de Gemini',
+          reportar: sum.flagContentUri || null,
+        }
+      : null,
   };
 }
 
