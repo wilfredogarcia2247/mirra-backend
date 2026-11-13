@@ -6,7 +6,8 @@ const { obtenerResenasGoogle } = require('../services/resenasGoogle');
 // Responde { nota, total, enlace, resumen } o null si no hay clave o Google falla.
 router.get('/', async (req, res) => {
   const datos = await obtenerResenasGoogle();
-  res.set('Cache-Control', 'public, max-age=1800');
+  // El navegador pregunta siempre (el servidor ya guarda 6 h): así nadie se queda con datos viejos
+  res.set('Cache-Control', 'no-cache');
   return res.json(datos);
 });
 
