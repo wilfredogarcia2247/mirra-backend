@@ -1954,6 +1954,8 @@ router.post('/:id/items', async (req, res) => {
       // mismo precio, se suma la cantidad a esa línea en vez de crear una nueva.
       // No se suma a líneas que ya tienen orden de producción: esa orden se hizo para la
       // cantidad anterior, así que las unidades nuevas van en su propia línea.
+      // Tampoco se suma a líneas de un Set toda ocasión (lo agregado en el panel va suelto).
+      await asegurarColumnaSet();
       const existingLine = await sql`
         SELECT id FROM pedido_venta_productos
         WHERE pedido_venta_id = ${pedidoId}
@@ -1962,6 +1964,7 @@ router.post('/:id/items', async (req, res) => {
           AND precio_venta IS NOT DISTINCT FROM ${precioUnitario || null}::numeric
           AND orden_produccion_id IS NULL
           AND COALESCE(produccion_creada, FALSE) = FALSE
+          AND set_etiqueta IS NULL
         ORDER BY id ASC
         LIMIT 1
       `;
@@ -1980,8 +1983,9 @@ router.post('/:id/items', async (req, res) => {
 
     // devolver pedido actualizado (reutilizar lógica de GET /:id)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
+    await asegurarColumnaSet();
     const productosDetalle = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre, pv.set_etiqueta,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo, pv.orden_produccion_id, COALESCE(pv.produccion_creada, FALSE) AS produccion_creada, prod.image_url
@@ -2002,6 +2006,7 @@ router.post('/:id/items', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        set_etiqueta: item.set_etiqueta || null,
         orden_produccion_id: item.orden_produccion_id || null,
         produccion_creada: !!item.produccion_creada,
         cantidad,
@@ -2661,8 +2666,9 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
 
     // Devolver pedido actualizado (reusar consulta de detalle)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
+    await asegurarColumnaSet();
     const productosDetalle = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre, pv.set_etiqueta,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo, pv.orden_produccion_id, COALESCE(pv.produccion_creada, FALSE) AS produccion_creada, prod.image_url
@@ -2683,6 +2689,7 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        set_etiqueta: item.set_etiqueta || null,
         orden_produccion_id: item.orden_produccion_id || null,
         produccion_creada: !!item.produccion_creada,
         cantidad,
