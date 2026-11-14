@@ -18,6 +18,7 @@ const {
 } = require('../services/influencerCommissions');
 const { normalizeOrderFulfillment } = require('../services/orderFulfillment');
 const { ensureSucursalesTable, sql: branchSql } = require('../services/sucursales');
+const { asegurarColumnaSet, limpiarSetEtiqueta } = require('../services/setEtiqueta');
 const {
   obtenerConfigDescuentoMayor,
   calcularDescuentoMayor,
@@ -135,6 +136,8 @@ router.post('/', async (req, res) => {
     try {
       await sql`ALTER TABLE pedido_venta_productos ADD COLUMN IF NOT EXISTS produccion_creada BOOLEAN DEFAULT FALSE;`;
     } catch (e) { }
+    // Etiqueta del Set toda ocasión (para mostrar el pedido agrupado)
+    await asegurarColumnaSet();
     // Columnas de cupón en pedidos_venta (por si la migración no se ejecutó en este entorno)
     try {
       await sql`ALTER TABLE pedidos_venta ADD COLUMN IF NOT EXISTS cupon_id INTEGER;`;
@@ -280,7 +283,7 @@ router.post('/', async (req, res) => {
           }
         }
         // insertar la línea (guardando formula_id/formula_nombre si se proporcionó)
-        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave}, ${null}, ${false})`;
+        await sql`INSERT INTO pedido_venta_productos (pedido_venta_id, producto_id, cantidad, costo_unitario, precio_venta, nombre_producto, formula_id, formula_nombre, orden_produccion_id, produccion_creada, set_etiqueta) VALUES (${pedido[0].id}, ${p.producto_id}, ${p.cantidad}, ${costoUnitario}, ${precioUnitario}, ${nombreProducto}, ${formulaIdToSave}, ${formulaNombreToSave}, ${null}, ${false}, ${limpiarSetEtiqueta(p.set_etiqueta)})`;
       }
 
       // Calcular el total bruto de las líneas ya guardadas (mismo criterio que el detalle final)
@@ -356,7 +359,7 @@ router.post('/', async (req, res) => {
       await sql`COMMIT`;
 
       const productosDetalle = await sql`
-        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+        SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre, pv.set_etiqueta,
                COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
                COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
                COALESCE(pv.costo_unitario, prod.costo) AS costo,
@@ -385,6 +388,7 @@ router.post('/', async (req, res) => {
           producto_id: item.producto_id,
           formula_id: item.formula_id || null,
           formula_nombre: item.formula_nombre || null,
+          set_etiqueta: item.set_etiqueta || null,
           orden_produccion_id: item.orden_produccion_id || null,
           produccion_creada: !!item.produccion_creada,
           cantidad,

@@ -10,6 +10,7 @@ const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
 const { normalizarEntregaAdmin } = require('../services/entregaPedido');
 const { ensureSucursalesTable } = require('../services/sucursales');
+const { asegurarColumnaSet } = require('../services/setEtiqueta');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES, ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { requierePermiso } = require('../services/permisos');
@@ -1331,8 +1332,9 @@ router.get('/:id', async (req, res) => {
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
 
     const lineasStart = Date.now();
+    await asegurarColumnaSet();
     const productos = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.set_etiqueta,
              COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
@@ -1364,6 +1366,7 @@ router.get('/:id', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        set_etiqueta: item.set_etiqueta || null,
         orden_produccion_id: item.orden_produccion_id || null,
         produccion_creada: !!item.produccion_creada,
         cantidad,
