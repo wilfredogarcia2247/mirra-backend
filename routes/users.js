@@ -3,6 +3,7 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const bcrypt = require('bcryptjs');
+const { columnaPermiso, permisosDesdeColumnas, valoresPermisos } = require('../services/permisosColumnas');
 
 // Helper: verificar rol admin
 function requireAdmin(req, res) {
@@ -187,7 +188,7 @@ const MODULOS = [
   ] },
 ];
 const MODULOS_KEYS = MODULOS.flatMap((g) => g.items.map((i) => i.key));
-// Columnas booleanas del diseño viejo (para migrar una sola vez a la columna `permisos`)
+// Columnas booleanas del diseño viejo (para conservar su migración de permisos)
 const MODULOS_VIEJOS = ['dashboard', 'tasas_cambio', 'bancos', 'marcas', 'categorias', 'almacenes', 'productos', 'formulas', 'pedidos', 'usuarios'];
 // Qué pantallas nuevas abría antes cada permiso viejo (se reparten una sola vez)
 const PERMISOS_DERIVADOS = {
@@ -199,7 +200,7 @@ const PERMISOS_DERIVADOS = {
 // (los de dinero y clientes quedan apagados hasta que el admin los marque).
 const REPORTES_TIENDA = ['rep_cierre_diario', 'rep_pedidos_estado', 'rep_inventario', 'rep_rotacion_inventario',
   'rep_historial_produccion', 'rep_productos_favoritos', 'rep_compras', 'rep_entregas'];
-const PERMISOS_VERSION = 3;
+const PERMISOS_VERSION = 4;
 
 let _aseguradoModulos = false;
 async function asegurarUsuarioModulos() {
@@ -208,10 +209,16 @@ async function asegurarUsuarioModulos() {
     id SERIAL PRIMARY KEY,
     usuario_id INTEGER UNIQUE,
     permisos jsonb NOT NULL DEFAULT '{}'::jsonb,
+    permisos_version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`;
   await sql`ALTER TABLE usuario_modulos ADD COLUMN IF NOT EXISTS permisos jsonb NOT NULL DEFAULT '{}'::jsonb`;
+  await sql`ALTER TABLE usuario_modulos ADD COLUMN IF NOT EXISTS permisos_version INTEGER NOT NULL DEFAULT 1`;
+  const columnasPermiso = MODULOS_KEYS.map((key) =>
+    `ADD COLUMN IF NOT EXISTS "${columnaPermiso(key)}" BOOLEAN NOT NULL DEFAULT FALSE`,
+  ).join(', ');
+  await sql.query(`ALTER TABLE usuario_modulos ${columnasPermiso}`);
   // Migrar una sola vez: pasar las columnas booleanas viejas al JSON `permisos`
   try {
     const rows = await sql`SELECT * FROM usuario_modulos WHERE permisos = '{}'::jsonb OR permisos IS NULL`;
@@ -228,7 +235,6 @@ async function asegurarUsuarioModulos() {
   // Repartir una sola vez las pantallas nuevas según los permisos que ya tenía cada uno,
   // para que nadie pierda lo que usaba (antes Reportes iba con Dashboard, Producción con
   // Almacenes, y Marketing/Cintillo/Sucursales con Usuarios). permisos_version = 2: ya hecho.
-  await sql`ALTER TABLE usuario_modulos ADD COLUMN IF NOT EXISTS permisos_version INTEGER NOT NULL DEFAULT 1`;
   const pendientes = await sql`SELECT usuario_id, permisos FROM usuario_modulos WHERE permisos_version < 2`;
   for (const r of pendientes) {
     const p = { ...(r.permisos || {}) };
@@ -246,13 +252,29 @@ async function asegurarUsuarioModulos() {
     await sql`UPDATE usuario_modulos SET permisos = ${JSON.stringify(p)}::jsonb, permisos_version = 3
               WHERE usuario_id = ${r.usuario_id}`;
   }
+
+  // Migrar los permisos actuales del JSON a columnas individuales, sin tocar las columnas viejas.
+  const v3 = await sql`SELECT usuario_id, permisos FROM usuario_modulos WHERE permisos_version < 4`;
+  const columnas = MODULOS_KEYS.map((key) => `"${columnaPermiso(key)}"`);
+  const asignaciones = columnas.map((columna, index) => `${columna} = $${index + 1}`);
+  const versionParametro = MODULOS_KEYS.length + 1;
+  const usuarioParametro = MODULOS_KEYS.length + 2;
+  for (const r of v3) {
+    const valores = valoresPermisos(r.permisos || {}, MODULOS_KEYS);
+    await sql.query(
+      `UPDATE usuario_modulos
+       SET ${asignaciones.join(', ')}, permisos_version = $${versionParametro}
+       WHERE usuario_id = $${usuarioParametro}`,
+      [...valores, PERMISOS_VERSION, r.usuario_id],
+    );
+  }
   _aseguradoModulos = true;
 }
 
 // Respuesta al guardar: la fila y la lista de pantallas habilitadas
 function respuestaPermisos(row) {
-  const permisos = (row && row.permisos) || {};
-  return { ...(row || {}), modulos: MODULOS_KEYS.filter((k) => permisos[k] === true) };
+  const permisos = permisosDesdeColumnas(row, MODULOS_KEYS);
+  return { ...(row || {}), permisos, modulos: Object.keys(permisos) };
 }
 
 // Normaliza el cuerpo recibido a { key: true } solo para keys válidas
@@ -267,6 +289,24 @@ function leerPermisos(body) {
   return out;
 }
 
+async function guardarPermisos(usuarioId, permisos) {
+  const columnas = MODULOS_KEYS.map((key) => `"${columnaPermiso(key)}"`);
+  const columnasInsert = ['usuario_id', ...columnas, 'permisos_version', 'created_at', 'updated_at'];
+  const valores = [usuarioId, ...valoresPermisos(permisos, MODULOS_KEYS), PERMISOS_VERSION];
+  const placeholders = valores.map((_, index) => `$${index + 1}`);
+  const actualizaciones = columnas
+    .map((columna) => `${columna} = EXCLUDED.${columna}`)
+    .concat('permisos_version = EXCLUDED.permisos_version', 'updated_at = NOW()');
+
+  return sql.query(
+    `INSERT INTO usuario_modulos (${columnasInsert.join(', ')})
+     VALUES (${placeholders.join(', ')}, NOW(), NOW())
+     ON CONFLICT (usuario_id) DO UPDATE SET ${actualizaciones.join(', ')}
+     RETURNING *`,
+    valores,
+  );
+}
+
 
 // GET /api/users/:id/modulos -> obtener módulos habilitados para un usuario
 router.get('/:id/modulos', async (req, res) => {
@@ -276,9 +316,9 @@ router.get('/:id/modulos', async (req, res) => {
 
   try {
     await asegurarUsuarioModulos();
-    const rows = await sql`SELECT permisos FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-    const permisos = (rows && rows[0] && rows[0].permisos) || {};
-    const modulosHabilitados = MODULOS_KEYS.filter((k) => permisos[k] === true);
+    const rows = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
+    const permisos = permisosDesdeColumnas(rows && rows[0], MODULOS_KEYS);
+    const modulosHabilitados = Object.keys(permisos);
     return res.json({ modulos: modulosHabilitados, available_modulos: MODULOS_KEYS, grupos: MODULOS });
   } catch (err) {
     console.error('Error leyendo usuario_modulos:', err && err.message ? err.message : err);
@@ -294,13 +334,8 @@ router.post('/:id/modulos', async (req, res) => {
   const permisos = leerPermisos(req.body);
   try {
     await asegurarUsuarioModulos();
-    // eliminar cualquier fila previa y reinsertar (upsert sencillo)
-    await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
-    const inserted = await sql`
-      INSERT INTO usuario_modulos (usuario_id, permisos, permisos_version, created_at, updated_at)
-      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, ${PERMISOS_VERSION}, NOW(), NOW()) RETURNING *
-    `;
-    return res.status(201).json(respuestaPermisos(inserted && inserted[0]));
+    const saved = await guardarPermisos(id, permisos);
+    return res.status(201).json(respuestaPermisos(saved && saved[0]));
   } catch (err) {
     console.error('Error guardando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
@@ -315,12 +350,8 @@ router.put('/:id/modulos', async (req, res) => {
   const permisos = leerPermisos(req.body);
   try {
     await asegurarUsuarioModulos();
-    await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
-    const inserted = await sql`
-      INSERT INTO usuario_modulos (usuario_id, permisos, permisos_version, created_at, updated_at)
-      VALUES (${id}, ${JSON.stringify(permisos)}::jsonb, ${PERMISOS_VERSION}, NOW(), NOW()) RETURNING *
-    `;
-    return res.json(respuestaPermisos(inserted && inserted[0]));
+    const saved = await guardarPermisos(id, permisos);
+    return res.json(respuestaPermisos(saved && saved[0]));
   } catch (err) {
     console.error('Error reemplazando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });

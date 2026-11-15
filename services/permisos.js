@@ -1,7 +1,8 @@
-// Revisa en el servidor los permisos por pantalla (usuario_modulos.permisos).
+// Revisa en el servidor los permisos por pantalla (columnas usuario_modulos.perm_*).
 // El admin pasa siempre; los demás solo si tienen la clave marcada.
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
+const { columnaPermiso } = require('./permisosColumnas');
 
 async function tienePermiso(user, clave) {
   if (!user) return false;
@@ -9,9 +10,8 @@ async function tienePermiso(user, clave) {
   const id = Number(user.id);
   if (!Number.isFinite(id)) return false;
   try {
-    const rows = await sql`SELECT permisos FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-    const permisos = (rows && rows[0] && rows[0].permisos) || {};
-    return permisos[clave] === true;
+    const rows = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
+    return !!(rows && rows[0] && rows[0][columnaPermiso(clave)] === true);
   } catch (e) {
     return false; // sin tabla o sin columna: sin permiso
   }
