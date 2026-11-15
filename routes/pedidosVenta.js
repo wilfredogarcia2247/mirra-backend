@@ -14,6 +14,7 @@ const { asegurarColumnaSet } = require('../services/setEtiqueta');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES, ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { requierePermiso } = require('../services/permisos');
+const { PERMISOS_REPORTES_RESUMEN, datosParaReporte } = require('../services/reportesResumen');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
@@ -920,7 +921,7 @@ router.get('/paginated', async (req, res) => {
   }
 });
 
-router.get('/cierre-diario', async (req, res) => {
+router.get('/cierre-diario', requierePermiso('rep_cierre_diario'), async (req, res) => {
   const fecha = typeof req.query.fecha === 'string' ? req.query.fecha.trim() : '';
   const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? new Date(`${fecha}T00:00:00.000Z`) : null;
   if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== fecha) {
@@ -975,8 +976,12 @@ router.get('/cierre-diario', async (req, res) => {
   }
 });
 
-// Endpoint optimizado para reportes (evita N+1 y payload innecesario)
-router.get('/reportes-resumen', async (req, res) => {
+// Cada reporte compartido valida su permiso antes de consultar los pedidos.
+router.get('/reportes-resumen', (req, res, next) => {
+  const permiso = PERMISOS_REPORTES_RESUMEN.get(req.query.reporte);
+  if (!permiso) return res.status(400).json({ error: 'Reporte inválido' });
+  return requierePermiso(permiso)(req, res, next);
+}, async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -987,10 +992,6 @@ router.get('/reportes-resumen', async (req, res) => {
         pv.id,
         pv.estado,
         pv.fecha,
-        pv.nombre_cliente,
-        pv.telefono,
-        pv.cedula,
-        pv.cupon_codigo,
         COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
         COALESCE(pv.descuento_mayor, 0) AS descuento_mayor,
         pvp.producto_id,
@@ -1015,10 +1016,6 @@ router.get('/reportes-resumen', async (req, res) => {
           id: row.id,
           estado: row.estado,
           fecha: row.fecha,
-          nombre_cliente: row.nombre_cliente,
-          telefono: row.telefono,
-          cedula: row.cedula,
-          cupon_codigo: row.cupon_codigo || null,
           descuento_cupon: Number(row.descuento_cupon || 0),
           descuento_mayor: Number(row.descuento_mayor || 0),
           // Completado sin ningún pago: los reportes de ventas lo muestran como regalía, no como venta
@@ -1069,7 +1066,7 @@ router.get('/reportes-resumen', async (req, res) => {
       pedido.total = roundCurrency(bruto - descuento);
     }
 
-    res.json(Array.from(byPedidoId.values()));
+    res.json(datosParaReporte(Array.from(byPedidoId.values()), req.query.reporte));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1077,7 +1074,7 @@ router.get('/reportes-resumen', async (req, res) => {
 
 // Reporte: métodos de entrega y de dónde nos compran (estado/ciudad de los envíos nacionales).
 // Cuenta todos los pedidos que no están cancelados, dentro del periodo elegido.
-router.get('/reportes-entregas', async (req, res) => {
+router.get('/reportes-entregas', requierePermiso('rep_entregas'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';

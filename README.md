@@ -83,6 +83,8 @@ Aromas/
 Los permisos se guardan en columnas booleanas `perm_*` de `usuario_modulos`. El catálogo está en `services/usuarioModulos.js`; el panel sigue recibiendo la lista `modulos`.
 Al consultar permisos o un reporte que los valida, el servidor crea las columnas que faltan y migra una sola vez los permisos anteriores. La columna JSON `permisos` y las columnas booleanas antiguas se conservan como datos históricos: ya no se actualizan, por lo que volver a una versión anterior requiere reconciliar los cambios posteriores.
 
+El cierre diario y el reporte de entregas requieren sus permisos respectivos. `GET /api/pedidos-venta/reportes-resumen` exige el parámetro `reporte` (`ventas-periodo`, `productos-favoritos`, `pedidos-estado`, `compras` o `ticket-promedio`), valida el permiso correspondiente y devuelve únicamente los datos necesarios para ese reporte.
+
 ## Pruebas
 
 - Ejecuta las pruebas unitarias:
