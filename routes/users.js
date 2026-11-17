@@ -3,6 +3,8 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const bcrypt = require('bcryptjs');
+const { columnaPermiso, permisosDesdeColumnas, valoresPermisos } = require('../services/permisosColumnas');
+const { MODULOS, MODULOS_KEYS, PERMISOS_VERSION, asegurarUsuarioModulos } = require('../services/usuarioModulos');
 
 // Helper: verificar rol admin
 function requireAdmin(req, res) {
@@ -50,6 +52,12 @@ router.post('/', async (req, res) => {
     console.error('Error creando usuario:', err);
     return res.status(500).json({ error: 'Error creando usuario' });
   }
+});
+
+// Lista de módulos disponibles, agrupados por categoría (para la pantalla de Usuarios).
+// Va antes de '/:id' para que esa ruta no la tape.
+router.get('/available-modulos', (req, res) => {
+  return res.json({ available_modulos: MODULOS_KEYS, grupos: MODULOS });
 });
 
 // GET /api/users/:id -> obtener usuario
@@ -125,23 +133,42 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// --- Rutas para gestionar `usuario_modulos` ---
-// Lista de módulos disponibles (metadato para el frontend)
-router.get('/available-modulos', (req, res) => {
-  const available = [
-    'dashboard',
-    'tasas_cambio',
-    'bancos',
-    'marcas',
-    'categorias',
-    'almacenes',
-    'productos',
-    'formulas',
-    'pedidos',
-    'usuarios',
-  ];
-  return res.json({ available_modulos: available });
-});
+// Respuesta al guardar: la fila y la lista de pantallas habilitadas
+function respuestaPermisos(row) {
+  const permisos = permisosDesdeColumnas(row, MODULOS_KEYS);
+  return { ...(row || {}), permisos, modulos: Object.keys(permisos) };
+}
+
+// Normaliza el cuerpo recibido a { key: true } solo para keys válidas
+function leerPermisos(body) {
+  const src = (body && (body.modulos !== undefined ? body.modulos : body)) || {};
+  const out = {};
+  if (Array.isArray(src)) {
+    for (const k of src) if (MODULOS_KEYS.includes(k)) out[k] = true;
+  } else if (src && typeof src === 'object') {
+    for (const k of MODULOS_KEYS) if (src[k]) out[k] = true;
+  }
+  return out;
+}
+
+async function guardarPermisos(usuarioId, permisos) {
+  const columnas = MODULOS_KEYS.map((key) => `"${columnaPermiso(key)}"`);
+  const columnasInsert = ['usuario_id', ...columnas, 'permisos_version', 'created_at', 'updated_at'];
+  const valores = [usuarioId, ...valoresPermisos(permisos, MODULOS_KEYS), PERMISOS_VERSION];
+  const placeholders = valores.map((_, index) => `$${index + 1}`);
+  const actualizaciones = columnas
+    .map((columna) => `${columna} = EXCLUDED.${columna}`)
+    .concat('permisos_version = EXCLUDED.permisos_version', 'updated_at = NOW()');
+
+  return sql.query(
+    `INSERT INTO usuario_modulos (${columnasInsert.join(', ')})
+     VALUES (${placeholders.join(', ')}, NOW(), NOW())
+     ON CONFLICT (usuario_id) DO UPDATE SET ${actualizaciones.join(', ')}
+     RETURNING *`,
+    valores,
+  );
+}
+
 
 // GET /api/users/:id/modulos -> obtener módulos habilitados para un usuario
 router.get('/:id/modulos', async (req, res) => {
@@ -150,29 +177,11 @@ router.get('/:id/modulos', async (req, res) => {
   if (!requireAdminOrSelf(req, res, id)) return;
 
   try {
+    await asegurarUsuarioModulos();
     const rows = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-    const available = [
-      'dashboard',
-      'tasas_cambio',
-      'bancos',
-      'marcas',
-      'categorias',
-      'almacenes',
-      'productos',
-      'formulas',
-      'pedidos',
-      'usuarios',
-    ];
-
-    // Si no existe registro, retornar array vacío
-    if (!rows || rows.length === 0) {
-      return res.json({ modulos: [], available_modulos: available });
-    }
-
-    // Filtrar solo los módulos que están en true
-    const modulosHabilitados = available.filter(modulo => rows[0][modulo] === true);
-
-    return res.json({ modulos: modulosHabilitados, available_modulos: available });
+    const permisos = permisosDesdeColumnas(rows && rows[0], MODULOS_KEYS);
+    const modulosHabilitados = Object.keys(permisos);
+    return res.json({ modulos: modulosHabilitados, available_modulos: MODULOS_KEYS, grupos: MODULOS });
   } catch (err) {
     console.error('Error leyendo usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error leyendo permisos' });
@@ -184,37 +193,12 @@ router.post('/:id/modulos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-  const allowed = [
-    'dashboard',
-    'tasas_cambio',
-    'bancos',
-    'marcas',
-    'categorias',
-    'almacenes',
-    'productos',
-    'formulas',
-    'pedidos',
-    'usuarios',
-  ];
-  const body = req.body || {};
-  // construir fila completa: si falta un flag, se asume false
-  const row = { usuario_id: id };
-  for (const k of allowed) row[k] = body[k] != null ? !!body[k] : false;
-
+  const permisos = leerPermisos(req.body);
   try {
-    // eliminar cualquier fila previa y reinsertar (upsert sencillo)
-    await sql`BEGIN`;
-    await sql`DELETE FROM usuario_modulos WHERE usuario_id = ${id}`;
-    const inserted = await sql`
-      INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, usuarios, created_at, updated_at)
-      VALUES (
-        ${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, ${row.usuarios}, NOW(), NOW()
-      ) RETURNING *
-    `;
-    await sql`COMMIT`;
-    return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
+    await asegurarUsuarioModulos();
+    const saved = await guardarPermisos(id, permisos);
+    return res.status(201).json(respuestaPermisos(saved && saved[0]));
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error guardando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
   }
@@ -225,46 +209,12 @@ router.put('/:id/modulos', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const id = Number(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
-  const allowed = [
-    'dashboard',
-    'tasas_cambio',
-    'bancos',
-    'marcas',
-    'categorias',
-    'almacenes',
-    'productos',
-    'formulas',
-    'pedidos',
-    'usuarios',
-  ];
-  const body = req.body || {};
-  // require at least one field
-  const hasAny = allowed.some((k) => Object.prototype.hasOwnProperty.call(body, k));
-  if (!hasAny) return res.status(400).json({ error: 'Nada para actualizar' });
-  const row = { usuario_id: id };
-  for (const k of allowed) row[k] = body[k] != null ? !!body[k] : false;
+  const permisos = leerPermisos(req.body);
   try {
-    await sql`BEGIN`;
-    const exists = await sql`SELECT id FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-    if (exists && exists.length > 0) {
-      await sql`
-        UPDATE usuario_modulos SET
-          dashboard = ${row.dashboard}, tasas_cambio = ${row.tasas_cambio}, bancos = ${row.bancos}, marcas = ${row.marcas}, categorias = ${row.categorias}, almacenes = ${row.almacenes}, productos = ${row.productos}, formulas = ${row.formulas}, pedidos = ${row.pedidos}, usuarios = ${row.usuarios}, updated_at = NOW()
-        WHERE usuario_id = ${id}
-      `;
-      const updated = await sql`SELECT * FROM usuario_modulos WHERE usuario_id = ${id} LIMIT 1`;
-      await sql`COMMIT`;
-      return res.json(updated && updated[0] ? updated[0] : { ok: true });
-    } else {
-      const inserted = await sql`
-        INSERT INTO usuario_modulos (usuario_id, dashboard, tasas_cambio, bancos, marcas, categorias, almacenes, productos, formulas, pedidos, usuarios, created_at, updated_at)
-        VALUES (${row.usuario_id}, ${row.dashboard}, ${row.tasas_cambio}, ${row.bancos}, ${row.marcas}, ${row.categorias}, ${row.almacenes}, ${row.productos}, ${row.formulas}, ${row.pedidos}, ${row.usuarios}, NOW(), NOW()) RETURNING *
-      `;
-      await sql`COMMIT`;
-      return res.status(201).json(inserted && inserted[0] ? inserted[0] : { ok: true });
-    }
+    await asegurarUsuarioModulos();
+    const saved = await guardarPermisos(id, permisos);
+    return res.json(respuestaPermisos(saved && saved[0]));
   } catch (err) {
-    try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error reemplazando usuario_modulos:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'Error guardando permisos' });
   }

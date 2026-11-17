@@ -78,6 +78,11 @@ Aromas/
 - Inicia sesión con `POST /api/auth/login` (campos: email, password)
 - Usa el token JWT en el header `Authorization: Bearer <token>` para acceder a los endpoints protegidos
 
+### Permisos por pantalla
+
+Los permisos se guardan en columnas booleanas `perm_*` de `usuario_modulos`. El catálogo está en `services/usuarioModulos.js`; el panel sigue recibiendo la lista `modulos`.
+Al consultar permisos o un reporte que los valida, el servidor crea las columnas que faltan y migra una sola vez los permisos anteriores. La columna JSON `permisos` y las columnas booleanas antiguas se conservan como datos históricos: ya no se actualizan, por lo que volver a una versión anterior requiere reconciliar los cambios posteriores.
+
 ## Pruebas
 
 - Ejecuta las pruebas unitarias:

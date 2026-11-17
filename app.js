@@ -121,6 +121,8 @@ app.use('/api/productos/catalogo', require('./routes/productosCatalogo'));
 app.use('/api/tasas-cambio/activa', require('./routes/tasasCambioPublic'));
 app.use('/api/cintillo/activos', require('./routes/cintilloMensajesPublic'));
 app.use('/api/descuento-mayor/activo', require('./routes/descuentoMayorPublic'));
+// Reseñas de Google Maps para la página Comunidad (público, guardadas 6 h en memoria)
+app.use('/api/resenas-google', require('./routes/resenasGooglePublic'));
 app.post('/api/whatsapp/webhook', whatsappRoutes.webhookHandler);
 
 // Enlace propio por perfume (vista previa para WhatsApp/Instagram): /p/ch-good-girl-33

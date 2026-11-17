@@ -3,6 +3,7 @@ const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { snapshotPaidOrderCommission } = require('../services/influencerCommissionSnapshots');
+const { requierePermiso } = require('../services/permisos');
 
 function validarPago(body) {
   if (!body.pedido_venta_id || isNaN(Number(body.pedido_venta_id)))
@@ -48,7 +49,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.get('/resumen-metodo-moneda', async (req, res) => {
+router.get('/resumen-metodo-moneda', requierePermiso('rep_ventas_metodo'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';

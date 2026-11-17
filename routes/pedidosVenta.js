@@ -10,8 +10,10 @@ const { buildDailySalesClose } = require('../services/dailySalesClose');
 const { buildDeliveryReport } = require('../services/deliveryReport');
 const { normalizarEntregaAdmin } = require('../services/entregaPedido');
 const { ensureSucursalesTable } = require('../services/sucursales');
+const { asegurarColumnaSet } = require('../services/setEtiqueta');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES, ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
+const { requierePermiso } = require('../services/permisos');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
 const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
 const {
@@ -1106,7 +1108,7 @@ router.get('/reportes-entregas', async (req, res) => {
   }
 });
 
-router.get('/reportes-presentaciones', async (req, res) => {
+router.get('/reportes-presentaciones', requierePermiso('rep_ventas_presentacion'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -1207,7 +1209,7 @@ router.get('/reportes-presentaciones', async (req, res) => {
   }
 });
 
-router.get('/clientes-top-resumen', async (req, res) => {
+router.get('/clientes-top-resumen', requierePermiso('rep_clientes'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -1248,7 +1250,7 @@ async function asegurarEsquemaClientes() {
 }
 
 // Recompras: pedidos de clientes nuevos vs. recompras, por mes, y clientes agrupados por veces que compraron
-router.get('/clientes-recompra', async (req, res) => {
+router.get('/clientes-recompra', requierePermiso('rep_clientes'), async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
@@ -1264,7 +1266,7 @@ router.get('/clientes-recompra', async (req, res) => {
 
 // Reporte "Cómo vamos": compara el periodo A con el B y trae la evolución mes a mes.
 // ?a_inicio&a_fin&b_inicio&b_fin (obligatorias) &ev_inicio&ev_fin (opcionales), formato AAAA-MM-DD.
-router.get('/reporte-comparativo', async (req, res) => {
+router.get('/reporte-comparativo', requierePermiso('rep_resumen_general'), async (req, res) => {
   try {
     const fechaOk = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim());
     const q = req.query;
@@ -1288,7 +1290,7 @@ router.get('/reporte-comparativo', async (req, res) => {
 
 // Rentabilidad: ventas, costos (de la venta o de Fórmulas) y ganancia del periodo, total y por tamaño.
 // Mismo cálculo que "Cómo vamos". ?fecha_inicio&fecha_fin (AAAA-MM-DD, opcionales)
-router.get('/rentabilidad', async (req, res) => {
+router.get('/rentabilidad', requierePermiso('rep_rentabilidad'), async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
@@ -1301,7 +1303,7 @@ router.get('/rentabilidad', async (req, res) => {
 });
 
 // Clientes de un grupo (1, 2, 3, 4, 5, 6-9, 10+, 2+, todos o no_volvieron), paginado, con búsqueda
-router.get('/clientes-grupo', async (req, res) => {
+router.get('/clientes-grupo', requierePermiso('rep_clientes'), async (req, res) => {
   try {
     const periodo = leerPeriodo(req);
     if (!periodo) return res.status(400).json({ error: 'Fecha inválida; use el formato AAAA-MM-DD' });
@@ -1330,8 +1332,9 @@ router.get('/:id', async (req, res) => {
     if (pedido.length === 0) return res.status(404).json({ error: 'No encontrado' });
 
     const lineasStart = Date.now();
+    await asegurarColumnaSet();
     const productos = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.set_etiqueta,
              COALESCE(pv.formula_nombre, f.nombre) AS formula_nombre,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
@@ -1363,6 +1366,7 @@ router.get('/:id', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        set_etiqueta: item.set_etiqueta || null,
         orden_produccion_id: item.orden_produccion_id || null,
         produccion_creada: !!item.produccion_creada,
         cantidad,
@@ -1950,6 +1954,8 @@ router.post('/:id/items', async (req, res) => {
       // mismo precio, se suma la cantidad a esa línea en vez de crear una nueva.
       // No se suma a líneas que ya tienen orden de producción: esa orden se hizo para la
       // cantidad anterior, así que las unidades nuevas van en su propia línea.
+      // Tampoco se suma a líneas de un Set toda ocasión (lo agregado en el panel va suelto).
+      await asegurarColumnaSet();
       const existingLine = await sql`
         SELECT id FROM pedido_venta_productos
         WHERE pedido_venta_id = ${pedidoId}
@@ -1958,6 +1964,7 @@ router.post('/:id/items', async (req, res) => {
           AND precio_venta IS NOT DISTINCT FROM ${precioUnitario || null}::numeric
           AND orden_produccion_id IS NULL
           AND COALESCE(produccion_creada, FALSE) = FALSE
+          AND set_etiqueta IS NULL
         ORDER BY id ASC
         LIMIT 1
       `;
@@ -1976,8 +1983,9 @@ router.post('/:id/items', async (req, res) => {
 
     // devolver pedido actualizado (reutilizar lógica de GET /:id)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
+    await asegurarColumnaSet();
     const productosDetalle = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre, pv.set_etiqueta,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo, pv.orden_produccion_id, COALESCE(pv.produccion_creada, FALSE) AS produccion_creada, prod.image_url
@@ -1998,6 +2006,7 @@ router.post('/:id/items', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        set_etiqueta: item.set_etiqueta || null,
         orden_produccion_id: item.orden_produccion_id || null,
         produccion_creada: !!item.produccion_creada,
         cantidad,
@@ -2657,8 +2666,9 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
 
     // Devolver pedido actualizado (reusar consulta de detalle)
     const pedidoRowsAfter = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId}`;
+    await asegurarColumnaSet();
     const productosDetalle = await sql`
-      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre,
+      SELECT pv.id, pv.pedido_venta_id, pv.producto_id, pv.cantidad, pv.formula_id, pv.formula_nombre, pv.set_etiqueta,
              COALESCE(pv.nombre_producto, prod.nombre) AS producto_nombre,
              COALESCE(pv.precio_venta, prod.precio_venta) AS precio_venta,
              COALESCE(pv.costo_unitario, prod.costo) AS costo, pv.orden_produccion_id, COALESCE(pv.produccion_creada, FALSE) AS produccion_creada, prod.image_url
@@ -2679,6 +2689,7 @@ router.delete('/:pedidoId/lineas/:lineaId', async (req, res) => {
         producto_id: item.producto_id,
         formula_id: item.formula_id || null,
         formula_nombre: item.formula_nombre || null,
+        set_etiqueta: item.set_etiqueta || null,
         orden_produccion_id: item.orden_produccion_id || null,
         produccion_creada: !!item.produccion_creada,
         cantidad,
