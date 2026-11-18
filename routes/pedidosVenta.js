@@ -2091,6 +2091,10 @@ router.put('/:id/cupon', async (req, res) => {
   const validacion = await validarCupon(codigo);
   if (!validacion.ok) return res.status(validacion.status || 400).json({ error: validacion.error });
   const cupon = validacion.cupon;
+  let pedidoActualizado = false;
+  let usoCuponRegistrado = false;
+  let operacionConfirmada = false;
+  let pedidoOriginal = null;
 
   try {
     await ensureCuponesSchema();
@@ -2101,6 +2105,7 @@ router.put('/:id/cupon', async (req, res) => {
       return res.status(404).json({ error: 'Pedido no encontrado' });
     }
     const pedido = pedidos[0];
+    pedidoOriginal = pedido;
     const estado = String(pedido.estado || '').toLowerCase();
     if (estado === 'completado' || estado === 'cancelado') {
       await sql`ROLLBACK`;
@@ -2140,37 +2145,43 @@ router.put('/:id/cupon', async (req, res) => {
       : 0;
     const porcentajeComision = esInfluencer ? cupon.porcentaje_comision : 0;
     const comisionMonto = calculateCommission(baseComisionable, porcentajeComision);
+    const reclamo = await sql`
+      UPDATE pedidos_venta
+      SET cupon_id = ${cupon.id}, cupon_codigo = ${cupon.codigo},
+          descuento_cupon = ${descuentoCupon}, descuento_mayor = 0,
+          descuento_mayor_porcentaje = 0, descuento_mayor_quitado = FALSE
+      WHERE id = ${pedidoId}
+        AND cupon_id IS NULL
+        AND COALESCE(descuento_cupon, 0) = 0
+      RETURNING id
+    `;
+    if (!reclamo.length) {
+      await sql`ROLLBACK`;
+      return res.status(409).json({ error: 'El pedido ya fue actualizado con otro cupón' });
+    }
+    pedidoActualizado = true;
+
     const uso = await registrarUsoCupon(cupon, pedidoId, descuentoCupon, pedido.cliente_id, {
       base_comisionable: baseComisionable,
       porcentaje_comision: porcentajeComision,
       comision_monto: comisionMonto,
     });
     if (!uso.ok) {
-      await sql`ROLLBACK`;
-      return res.status(400).json({ error: uso.error });
-    }
-
-    try {
-      await sql`
-        UPDATE pedidos_venta
-        SET cupon_id = ${cupon.id}, cupon_codigo = ${cupon.codigo},
-            descuento_cupon = ${descuentoCupon}, descuento_mayor = 0,
-            descuento_mayor_porcentaje = 0, descuento_mayor_quitado = FALSE
-        WHERE id = ${pedidoId}
-      `;
-      await sql`COMMIT`;
-    } catch (error) {
-      await revertirUsoCupon(pedidoId);
       await sql`
         UPDATE pedidos_venta
         SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
             descuento_mayor = ${pedido.descuento_mayor || 0},
             descuento_mayor_porcentaje = ${pedido.descuento_mayor_porcentaje},
             descuento_mayor_quitado = ${pedido.descuento_mayor_quitado || false}
-        WHERE id = ${pedidoId}
+        WHERE id = ${pedidoId} AND cupon_id = ${cupon.id}
       `;
-      throw error;
+      pedidoActualizado = false;
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: uso.error });
     }
+    usoCuponRegistrado = true;
+    await sql`COMMIT`;
+    operacionConfirmada = true;
     const resumen = [{
       id: pedidoId,
       total: totalBase,
@@ -2190,6 +2201,21 @@ router.put('/:id/cupon', async (req, res) => {
       total_final: resumen[0].total_final,
     });
   } catch (err) {
+    if (!operacionConfirmada && pedidoActualizado && pedidoOriginal) {
+      if (usoCuponRegistrado) await revertirUsoCupon(pedidoId);
+      try {
+        await sql`
+          UPDATE pedidos_venta
+          SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
+              descuento_mayor = ${pedidoOriginal.descuento_mayor || 0},
+              descuento_mayor_porcentaje = ${pedidoOriginal.descuento_mayor_porcentaje},
+              descuento_mayor_quitado = ${pedidoOriginal.descuento_mayor_quitado || false}
+          WHERE id = ${pedidoId} AND cupon_id = ${cupon.id}
+        `;
+      } catch (cleanupError) {
+        console.error('No se pudo restaurar el pedido tras fallar el cupón:', cleanupError && cleanupError.message ? cleanupError.message : cleanupError);
+      }
+    }
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error aplicando cupón desde el pedido:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'No se pudo aplicar el cupón al pedido' });
