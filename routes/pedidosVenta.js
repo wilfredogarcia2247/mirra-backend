@@ -2109,7 +2109,7 @@ router.put('/:id/cupon', async (req, res) => {
     const estado = String(pedido.estado || '').toLowerCase();
     if (estado === 'completado' || estado === 'cancelado') {
       await sql`ROLLBACK`;
-      return res.status(400).json({ error: 'Solo se puede aplicar un cupón a un pedido pendiente' });
+      return res.status(400).json({ error: 'Solo se puede aplicar un cupón a un pedido activo' });
     }
     if (pedido.cupon_id != null || Number(pedido.descuento_cupon || 0) > 0) {
       await sql`ROLLBACK`;
