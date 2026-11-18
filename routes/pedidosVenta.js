@@ -14,12 +14,26 @@ const { asegurarColumnaSet } = require('../services/setEtiqueta');
 const { historialClienteDePedido, rankingClientes, estadisticasRecompra, clientesPorGrupo, GRUPOS, INACTIVIDADES, ESTADOS_COMPLETADOS } = require('../services/clientesFrecuentes');
 const { datosPeriodo, evolucionMensual } = require('../services/reporteComparativo');
 const { requierePermiso } = require('../services/permisos');
+const { PERMISOS_REPORTES_RESUMEN, datosParaReporte } = require('../services/reportesResumen');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
-const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
+const {
+  revertirUsoCupon,
+  recalcularDescuentoCupon,
+  normalizeCodigo,
+  validarCupon,
+  calcularDescuento,
+  registrarUsoCupon,
+  ensureCuponesSchema,
+} = require('../services/cupones');
+const { calculateCommissionableBase, calculateCommission } = require('../services/influencerCommissions');
 const {
   asegurarEsquemaDescuentoMayor,
   recalcularDescuentoMayor,
   cambiarDescuentoMayorPedido,
+  elegirDescuento,
+  descuentoParaPedido,
+  lineasDelPedido,
+  obtenerConfigDescuentoMayor,
 } = require('../services/descuentoMayor');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
@@ -920,7 +934,7 @@ router.get('/paginated', async (req, res) => {
   }
 });
 
-router.get('/cierre-diario', async (req, res) => {
+router.get('/cierre-diario', requierePermiso('rep_cierre_diario'), async (req, res) => {
   const fecha = typeof req.query.fecha === 'string' ? req.query.fecha.trim() : '';
   const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? new Date(`${fecha}T00:00:00.000Z`) : null;
   if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== fecha) {
@@ -975,8 +989,12 @@ router.get('/cierre-diario', async (req, res) => {
   }
 });
 
-// Endpoint optimizado para reportes (evita N+1 y payload innecesario)
-router.get('/reportes-resumen', async (req, res) => {
+// Cada reporte compartido valida su permiso antes de consultar los pedidos.
+router.get('/reportes-resumen', (req, res, next) => {
+  const permiso = PERMISOS_REPORTES_RESUMEN.get(req.query.reporte);
+  if (!permiso) return res.status(400).json({ error: 'Reporte inválido' });
+  return requierePermiso(permiso)(req, res, next);
+}, async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -987,10 +1005,6 @@ router.get('/reportes-resumen', async (req, res) => {
         pv.id,
         pv.estado,
         pv.fecha,
-        pv.nombre_cliente,
-        pv.telefono,
-        pv.cedula,
-        pv.cupon_codigo,
         COALESCE(pv.descuento_cupon, 0) AS descuento_cupon,
         COALESCE(pv.descuento_mayor, 0) AS descuento_mayor,
         pvp.producto_id,
@@ -1015,10 +1029,6 @@ router.get('/reportes-resumen', async (req, res) => {
           id: row.id,
           estado: row.estado,
           fecha: row.fecha,
-          nombre_cliente: row.nombre_cliente,
-          telefono: row.telefono,
-          cedula: row.cedula,
-          cupon_codigo: row.cupon_codigo || null,
           descuento_cupon: Number(row.descuento_cupon || 0),
           descuento_mayor: Number(row.descuento_mayor || 0),
           // Completado sin ningún pago: los reportes de ventas lo muestran como regalía, no como venta
@@ -1069,7 +1079,7 @@ router.get('/reportes-resumen', async (req, res) => {
       pedido.total = roundCurrency(bruto - descuento);
     }
 
-    res.json(Array.from(byPedidoId.values()));
+    res.json(datosParaReporte(Array.from(byPedidoId.values()), req.query.reporte));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1077,7 +1087,7 @@ router.get('/reportes-resumen', async (req, res) => {
 
 // Reporte: métodos de entrega y de dónde nos compran (estado/ciudad de los envíos nacionales).
 // Cuenta todos los pedidos que no están cancelados, dentro del periodo elegido.
-router.get('/reportes-entregas', async (req, res) => {
+router.get('/reportes-entregas', requierePermiso('rep_entregas'), async (req, res) => {
   try {
     const fechaInicio = typeof req.query.fecha_inicio === 'string' ? req.query.fecha_inicio.trim() : '';
     const fechaFin = typeof req.query.fecha_fin === 'string' ? req.query.fecha_fin.trim() : '';
@@ -2072,6 +2082,219 @@ router.put('/:id/descuento-mayor', async (req, res) => {
   } catch (err) {
     console.error('Error cambiando descuento al mayor del pedido:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'No se pudo cambiar el descuento al mayor' });
+  }
+});
+
+router.put('/:id/cupon', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  const codigo = normalizeCodigo(req.body?.codigo);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return res.status(400).json({ error: 'ID inválido' });
+  if (!codigo) return res.status(400).json({ error: 'Ingresa el código del cupón' });
+
+  const validacion = await validarCupon(codigo);
+  if (!validacion.ok) return res.status(validacion.status || 400).json({ error: validacion.error });
+  const cupon = validacion.cupon;
+  let pedidoActualizado = false;
+  let usoCuponRegistrado = false;
+  let operacionConfirmada = false;
+  let pedidoOriginal = null;
+
+  try {
+    await ensureCuponesSchema();
+    await sql`BEGIN`;
+    const pedidos = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidos.length) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const pedido = pedidos[0];
+    pedidoOriginal = pedido;
+    const estado = String(pedido.estado || '').toLowerCase();
+    if (estado === 'completado' || estado === 'cancelado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Solo se puede aplicar un cupón a un pedido activo' });
+    }
+    if (pedido.cupon_id != null || Number(pedido.descuento_cupon || 0) > 0) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Este pedido ya tiene un cupón aplicado' });
+    }
+    const pagos = await sql`SELECT id FROM pagos WHERE pedido_venta_id = ${pedidoId} LIMIT 1`;
+    if (pagos.length) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'No se puede aplicar un cupón después de registrar un pago' });
+    }
+
+    const lineas = await sql`
+      SELECT pvp.cantidad, COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
+      FROM pedido_venta_productos pvp
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE pvp.pedido_venta_id = ${pedidoId}
+    `;
+    const totalBase = roundCurrency((lineas || []).reduce((total, linea) => {
+      const cantidad = Number(linea.cantidad) || 0;
+      const precio = Number(linea.precio_venta) || 0;
+      return total + cantidad * precio;
+    }, 0));
+    const descuentoCupon = calcularDescuento(totalBase, cupon.descuento_porcentaje);
+    const descuentoMayor = roundCurrency(pedido.descuento_mayor || 0);
+    if (elegirDescuento(descuentoCupon, descuentoMayor) !== 'cupon') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'El descuento al mayor es igual o mayor que el cupón; se conserva el descuento al mayor' });
+    }
+
+    const esInfluencer = cupon.colaborador_tipo === 'influencer';
+    const baseComisionable = esInfluencer
+      ? calculateCommissionableBase(Math.max(0, totalBase - descuentoCupon), 0)
+      : 0;
+    const porcentajeComision = esInfluencer ? cupon.porcentaje_comision : 0;
+    const comisionMonto = calculateCommission(baseComisionable, porcentajeComision);
+    const reclamo = await sql`
+      UPDATE pedidos_venta
+      SET cupon_id = ${cupon.id}, cupon_codigo = ${cupon.codigo},
+          descuento_cupon = ${descuentoCupon}, descuento_mayor = 0,
+          descuento_mayor_porcentaje = 0, descuento_mayor_quitado = FALSE
+      WHERE id = ${pedidoId}
+        AND cupon_id IS NULL
+        AND COALESCE(descuento_cupon, 0) = 0
+      RETURNING id
+    `;
+    if (!reclamo.length) {
+      await sql`ROLLBACK`;
+      return res.status(409).json({ error: 'El pedido ya fue actualizado con otro cupón' });
+    }
+    pedidoActualizado = true;
+
+    const uso = await registrarUsoCupon(cupon, pedidoId, descuentoCupon, pedido.cliente_id, {
+      base_comisionable: baseComisionable,
+      porcentaje_comision: porcentajeComision,
+      comision_monto: comisionMonto,
+    });
+    if (!uso.ok) {
+      await sql`
+        UPDATE pedidos_venta
+        SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
+            descuento_mayor = ${pedido.descuento_mayor || 0},
+            descuento_mayor_porcentaje = ${pedido.descuento_mayor_porcentaje},
+            descuento_mayor_quitado = ${pedido.descuento_mayor_quitado || false}
+        WHERE id = ${pedidoId} AND cupon_id = ${cupon.id}
+      `;
+      pedidoActualizado = false;
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: uso.error });
+    }
+    usoCuponRegistrado = true;
+    await sql`COMMIT`;
+    operacionConfirmada = true;
+    const resumen = [{
+      id: pedidoId,
+      total: totalBase,
+      total_base: totalBase,
+      descuento_cupon: descuentoCupon,
+      descuento_mayor: 0,
+    }];
+    await attachAjustesToPedidos(resumen);
+    return res.json({
+      ok: true,
+      pedido_id: pedidoId,
+      cupon_codigo: cupon.codigo,
+      descuento_cupon: descuentoCupon,
+      total_base: resumen[0].total_base,
+      total_descuentos: resumen[0].total_descuentos,
+      total_recargos: resumen[0].total_recargos,
+      total_final: resumen[0].total_final,
+    });
+  } catch (err) {
+    if (!operacionConfirmada && pedidoActualizado && pedidoOriginal) {
+      if (usoCuponRegistrado) await revertirUsoCupon(pedidoId);
+      try {
+        await sql`
+          UPDATE pedidos_venta
+          SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
+              descuento_mayor = ${pedidoOriginal.descuento_mayor || 0},
+              descuento_mayor_porcentaje = ${pedidoOriginal.descuento_mayor_porcentaje},
+              descuento_mayor_quitado = ${pedidoOriginal.descuento_mayor_quitado || false}
+          WHERE id = ${pedidoId} AND cupon_id = ${cupon.id}
+        `;
+      } catch (cleanupError) {
+        console.error('No se pudo restaurar el pedido tras fallar el cupón:', cleanupError && cleanupError.message ? cleanupError.message : cleanupError);
+      }
+    }
+    try { await sql`ROLLBACK`; } catch (e) { }
+    console.error('Error aplicando cupón desde el pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo aplicar el cupón al pedido' });
+  }
+});
+
+router.delete('/:id/cupon', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return res.status(400).json({ error: 'ID inválido' });
+
+  try {
+    const pedidos = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} LIMIT 1`;
+    if (!pedidos.length) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const pedido = pedidos[0];
+    if (pedido.cupon_id == null) return res.status(400).json({ error: 'Este pedido no tiene un cupón aplicado' });
+    const estado = String(pedido.estado || '').toLowerCase();
+    if (estado === 'completado' || estado === 'cancelado') {
+      return res.status(400).json({ error: 'Solo se puede quitar el cupón de un pedido activo' });
+    }
+    const pagos = await sql`SELECT id FROM pagos WHERE pedido_venta_id = ${pedidoId} LIMIT 1`;
+    if (pagos.length) return res.status(400).json({ error: 'No se puede quitar un cupón después de registrar un pago' });
+
+    const configActual = pedido.descuento_mayor_reglas ? null : await obtenerConfigDescuentoMayor();
+    const resultadoMayor = descuentoParaPedido(pedido, await lineasDelPedido(pedidoId), configActual);
+    const descuentoMayor = roundCurrency(resultadoMayor.descuento || 0);
+    const porcentajeMayor = descuentoMayor > 0 ? resultadoMayor.porcentaje : 0;
+    const cambio = await sql`
+      WITH actualizado AS (
+        UPDATE pedidos_venta
+        SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
+            descuento_mayor = ${descuentoMayor},
+            descuento_mayor_porcentaje = ${porcentajeMayor},
+            descuento_mayor_quitado = FALSE
+        WHERE id = ${pedidoId} AND cupon_id = ${pedido.cupon_id}
+          AND LOWER(COALESCE(estado, '')) NOT IN ('completado', 'cancelado')
+        RETURNING id
+      ), uso_eliminado AS (
+        DELETE FROM cupon_usos
+        WHERE pedido_venta_id = ${pedidoId} AND cupon_id = ${pedido.cupon_id}
+          AND pedido_pagado_en IS NULL
+          AND EXISTS (SELECT 1 FROM actualizado)
+        RETURNING cupon_id
+      ), uso_liberado AS (
+        UPDATE cupones c
+        SET uso_actual = GREATEST(COALESCE(c.uso_actual, 0) - 1, 0), actualizado_en = NOW()
+        FROM uso_eliminado u
+        WHERE c.id = u.cupon_id
+        RETURNING c.id
+      )
+      SELECT id FROM actualizado
+    `;
+    if (!cambio.length) return res.status(409).json({ error: 'El pedido cambió; vuelve a cargarlo e intenta otra vez' });
+
+    const lineas = await sql`
+      SELECT pvp.cantidad, COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
+      FROM pedido_venta_productos pvp
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE pvp.pedido_venta_id = ${pedidoId}
+    `;
+    const totalBase = roundCurrency((lineas || []).reduce((total, linea) => total + (Number(linea.cantidad) || 0) * (Number(linea.precio_venta) || 0), 0));
+    const resumen = [{ id: pedidoId, total: totalBase, total_base: totalBase, descuento_cupon: 0, descuento_mayor: descuentoMayor }];
+    await attachAjustesToPedidos(resumen);
+    return res.json({
+      ok: true,
+      pedido_id: pedidoId,
+      descuento_cupon: 0,
+      descuento_mayor: descuentoMayor,
+      descuento_mayor_porcentaje: porcentajeMayor,
+      total_base: resumen[0].total_base,
+      total_descuentos: resumen[0].total_descuentos,
+      total_recargos: resumen[0].total_recargos,
+      total_final: resumen[0].total_final,
+    });
+  } catch (err) {
+    console.error('Error quitando cupón del pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo quitar el cupón del pedido' });
   }
 });
 
