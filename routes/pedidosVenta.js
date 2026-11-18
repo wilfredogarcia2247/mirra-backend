@@ -31,6 +31,9 @@ const {
   recalcularDescuentoMayor,
   cambiarDescuentoMayorPedido,
   elegirDescuento,
+  descuentoParaPedido,
+  lineasDelPedido,
+  obtenerConfigDescuentoMayor,
 } = require('../services/descuentoMayor');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
@@ -2219,6 +2222,79 @@ router.put('/:id/cupon', async (req, res) => {
     try { await sql`ROLLBACK`; } catch (e) { }
     console.error('Error aplicando cupón desde el pedido:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'No se pudo aplicar el cupón al pedido' });
+  }
+});
+
+router.delete('/:id/cupon', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return res.status(400).json({ error: 'ID inválido' });
+
+  try {
+    const pedidos = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} LIMIT 1`;
+    if (!pedidos.length) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const pedido = pedidos[0];
+    if (pedido.cupon_id == null) return res.status(400).json({ error: 'Este pedido no tiene un cupón aplicado' });
+    const estado = String(pedido.estado || '').toLowerCase();
+    if (estado === 'completado' || estado === 'cancelado') {
+      return res.status(400).json({ error: 'Solo se puede quitar el cupón de un pedido activo' });
+    }
+    const pagos = await sql`SELECT id FROM pagos WHERE pedido_venta_id = ${pedidoId} LIMIT 1`;
+    if (pagos.length) return res.status(400).json({ error: 'No se puede quitar un cupón después de registrar un pago' });
+
+    const configActual = pedido.descuento_mayor_reglas ? null : await obtenerConfigDescuentoMayor();
+    const resultadoMayor = descuentoParaPedido(pedido, await lineasDelPedido(pedidoId), configActual);
+    const descuentoMayor = roundCurrency(resultadoMayor.descuento || 0);
+    const porcentajeMayor = descuentoMayor > 0 ? resultadoMayor.porcentaje : 0;
+    const cambio = await sql`
+      WITH actualizado AS (
+        UPDATE pedidos_venta
+        SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
+            descuento_mayor = ${descuentoMayor},
+            descuento_mayor_porcentaje = ${porcentajeMayor},
+            descuento_mayor_quitado = FALSE
+        WHERE id = ${pedidoId} AND cupon_id = ${pedido.cupon_id}
+          AND LOWER(COALESCE(estado, '')) NOT IN ('completado', 'cancelado')
+        RETURNING id
+      ), uso_eliminado AS (
+        DELETE FROM cupon_usos
+        WHERE pedido_venta_id = ${pedidoId} AND cupon_id = ${pedido.cupon_id}
+          AND pedido_pagado_en IS NULL
+          AND EXISTS (SELECT 1 FROM actualizado)
+        RETURNING cupon_id
+      ), uso_liberado AS (
+        UPDATE cupones c
+        SET uso_actual = GREATEST(COALESCE(c.uso_actual, 0) - 1, 0), actualizado_en = NOW()
+        FROM uso_eliminado u
+        WHERE c.id = u.cupon_id
+        RETURNING c.id
+      )
+      SELECT id FROM actualizado
+    `;
+    if (!cambio.length) return res.status(409).json({ error: 'El pedido cambió; vuelve a cargarlo e intenta otra vez' });
+
+    const lineas = await sql`
+      SELECT pvp.cantidad, COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
+      FROM pedido_venta_productos pvp
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE pvp.pedido_venta_id = ${pedidoId}
+    `;
+    const totalBase = roundCurrency((lineas || []).reduce((total, linea) => total + (Number(linea.cantidad) || 0) * (Number(linea.precio_venta) || 0), 0));
+    const resumen = [{ id: pedidoId, total: totalBase, total_base: totalBase, descuento_cupon: 0, descuento_mayor: descuentoMayor }];
+    await attachAjustesToPedidos(resumen);
+    return res.json({
+      ok: true,
+      pedido_id: pedidoId,
+      descuento_cupon: 0,
+      descuento_mayor: descuentoMayor,
+      descuento_mayor_porcentaje: porcentajeMayor,
+      total_base: resumen[0].total_base,
+      total_descuentos: resumen[0].total_descuentos,
+      total_recargos: resumen[0].total_recargos,
+      total_final: resumen[0].total_final,
+    });
+  } catch (err) {
+    console.error('Error quitando cupón del pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo quitar el cupón del pedido' });
   }
 });
 
