@@ -16,11 +16,21 @@ const { datosPeriodo, evolucionMensual } = require('../services/reporteComparati
 const { requierePermiso } = require('../services/permisos');
 const { PERMISOS_REPORTES_RESUMEN, datosParaReporte } = require('../services/reportesResumen');
 const { nombreProducto, mensajeFaltaMateriaPrima } = require('../services/mensajesProduccion');
-const { revertirUsoCupon, recalcularDescuentoCupon } = require('../services/cupones');
+const {
+  revertirUsoCupon,
+  recalcularDescuentoCupon,
+  normalizeCodigo,
+  validarCupon,
+  calcularDescuento,
+  registrarUsoCupon,
+  ensureCuponesSchema,
+} = require('../services/cupones');
+const { calculateCommissionableBase, calculateCommission } = require('../services/influencerCommissions');
 const {
   asegurarEsquemaDescuentoMayor,
   recalcularDescuentoMayor,
   cambiarDescuentoMayorPedido,
+  elegirDescuento,
 } = require('../services/descuentoMayor');
 
 const SLOW_QUERY_MS = Number(process.env.SLOW_QUERY_MS || 700);
@@ -2069,6 +2079,120 @@ router.put('/:id/descuento-mayor', async (req, res) => {
   } catch (err) {
     console.error('Error cambiando descuento al mayor del pedido:', err && err.message ? err.message : err);
     return res.status(500).json({ error: 'No se pudo cambiar el descuento al mayor' });
+  }
+});
+
+router.put('/:id/cupon', async (req, res) => {
+  const pedidoId = Number(req.params.id);
+  const codigo = normalizeCodigo(req.body?.codigo);
+  if (!Number.isInteger(pedidoId) || pedidoId < 1) return res.status(400).json({ error: 'ID inválido' });
+  if (!codigo) return res.status(400).json({ error: 'Ingresa el código del cupón' });
+
+  const validacion = await validarCupon(codigo);
+  if (!validacion.ok) return res.status(validacion.status || 400).json({ error: validacion.error });
+  const cupon = validacion.cupon;
+
+  try {
+    await ensureCuponesSchema();
+    await sql`BEGIN`;
+    const pedidos = await sql`SELECT * FROM pedidos_venta WHERE id = ${pedidoId} FOR UPDATE`;
+    if (!pedidos.length) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    const pedido = pedidos[0];
+    const estado = String(pedido.estado || '').toLowerCase();
+    if (estado === 'completado' || estado === 'cancelado') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Solo se puede aplicar un cupón a un pedido pendiente' });
+    }
+    if (pedido.cupon_id != null || Number(pedido.descuento_cupon || 0) > 0) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'Este pedido ya tiene un cupón aplicado' });
+    }
+    const pagos = await sql`SELECT id FROM pagos WHERE pedido_venta_id = ${pedidoId} LIMIT 1`;
+    if (pagos.length) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'No se puede aplicar un cupón después de registrar un pago' });
+    }
+
+    const lineas = await sql`
+      SELECT pvp.cantidad, COALESCE(pvp.precio_venta, prod.precio_venta, 0) AS precio_venta
+      FROM pedido_venta_productos pvp
+      LEFT JOIN productos prod ON prod.id = pvp.producto_id
+      WHERE pvp.pedido_venta_id = ${pedidoId}
+    `;
+    const totalBase = roundCurrency((lineas || []).reduce((total, linea) => {
+      const cantidad = Number(linea.cantidad) || 0;
+      const precio = Number(linea.precio_venta) || 0;
+      return total + cantidad * precio;
+    }, 0));
+    const descuentoCupon = calcularDescuento(totalBase, cupon.descuento_porcentaje);
+    const descuentoMayor = roundCurrency(pedido.descuento_mayor || 0);
+    if (elegirDescuento(descuentoCupon, descuentoMayor) !== 'cupon') {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: 'El descuento al mayor es igual o mayor que el cupón; se conserva el descuento al mayor' });
+    }
+
+    const esInfluencer = cupon.colaborador_tipo === 'influencer';
+    const baseComisionable = esInfluencer
+      ? calculateCommissionableBase(Math.max(0, totalBase - descuentoCupon), 0)
+      : 0;
+    const porcentajeComision = esInfluencer ? cupon.porcentaje_comision : 0;
+    const comisionMonto = calculateCommission(baseComisionable, porcentajeComision);
+    const uso = await registrarUsoCupon(cupon, pedidoId, descuentoCupon, pedido.cliente_id, {
+      base_comisionable: baseComisionable,
+      porcentaje_comision: porcentajeComision,
+      comision_monto: comisionMonto,
+    });
+    if (!uso.ok) {
+      await sql`ROLLBACK`;
+      return res.status(400).json({ error: uso.error });
+    }
+
+    try {
+      await sql`
+        UPDATE pedidos_venta
+        SET cupon_id = ${cupon.id}, cupon_codigo = ${cupon.codigo},
+            descuento_cupon = ${descuentoCupon}, descuento_mayor = 0,
+            descuento_mayor_porcentaje = 0, descuento_mayor_quitado = FALSE
+        WHERE id = ${pedidoId}
+      `;
+      await sql`COMMIT`;
+    } catch (error) {
+      await revertirUsoCupon(pedidoId);
+      await sql`
+        UPDATE pedidos_venta
+        SET cupon_id = NULL, cupon_codigo = NULL, descuento_cupon = 0,
+            descuento_mayor = ${pedido.descuento_mayor || 0},
+            descuento_mayor_porcentaje = ${pedido.descuento_mayor_porcentaje},
+            descuento_mayor_quitado = ${pedido.descuento_mayor_quitado || false}
+        WHERE id = ${pedidoId}
+      `;
+      throw error;
+    }
+    const resumen = [{
+      id: pedidoId,
+      total: totalBase,
+      total_base: totalBase,
+      descuento_cupon: descuentoCupon,
+      descuento_mayor: 0,
+    }];
+    await attachAjustesToPedidos(resumen);
+    return res.json({
+      ok: true,
+      pedido_id: pedidoId,
+      cupon_codigo: cupon.codigo,
+      descuento_cupon: descuentoCupon,
+      total_base: resumen[0].total_base,
+      total_descuentos: resumen[0].total_descuentos,
+      total_recargos: resumen[0].total_recargos,
+      total_final: resumen[0].total_final,
+    });
+  } catch (err) {
+    try { await sql`ROLLBACK`; } catch (e) { }
+    console.error('Error aplicando cupón desde el pedido:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'No se pudo aplicar el cupón al pedido' });
   }
 });
 
