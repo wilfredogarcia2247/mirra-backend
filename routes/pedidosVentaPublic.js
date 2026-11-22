@@ -4,7 +4,7 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
-const { getAgotadoProductIds, getFormulaIdsSinEsencia } = require('../services/productosAgotados');
+const { getAgotadoProductIds, getFormulaIdsSinEsencia, getEsenciasQueNoAlcanzan } = require('../services/productosAgotados');
 const { faltanSieteMl, avisoSieteMl } = require('../services/minimoSieteMl');
 const {
   normalizeCodigo,
@@ -210,6 +210,22 @@ router.post('/', async (req, res) => {
         error: `Ya no queda esencia para: ${lista.join(', ')}. Quítalo del carrito o elige otro tamaño para continuar.`,
         productos_agotados: idsP,
         formulas_agotadas: idsF,
+      });
+    }
+
+    // Todo el pedido junto: la esencia que piden todas las líneas (p. ej. 2 de 50 ml, o 50 ml + 30 ml
+    // del mismo perfume) no puede pasar de lo que queda
+    const noAlcanzan = await getEsenciasQueNoAlcanzan(productos);
+    if (noAlcanzan.length > 0) {
+      const idsF = [...new Set(noAlcanzan.flatMap((x) => x.formulas))];
+      const filas = await sql`
+        SELECT f.id, p.nombre AS producto
+        FROM formulas f JOIN productos p ON p.id = f.producto_terminado_id WHERE f.id = ANY(${idsF})`;
+      // Nombre del perfume de cada esencia que no alcanza
+      const nombres = noAlcanzan.map((x) => (filas || []).find((f) => x.formulas.includes(Number(f.id)))?.producto || x.nombre);
+      return res.status(400).json({
+        error: `No queda esencia suficiente para la cantidad pedida de: ${[...new Set(nombres)].join(', ')}. Baja la cantidad o elige otro tamaño para continuar.`,
+        formulas_sin_esencia_suficiente: idsF,
       });
     }
 

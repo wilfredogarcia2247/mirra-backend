@@ -109,4 +109,84 @@ async function getQuedanPocosProductIds(productIds, frascos = 3, sqlClient = sql
   return new Set((rows || []).map((r) => Number(r.producto_id)));
 }
 
-module.exports = { getAgotadoProductIds, getFormulaIdsSinEsencia, getQuedanPocosProductIds };
+/**
+ * Esencia que pide cada presentación y esencia que queda, para que la tienda no deje
+ * sumar en el carrito más frascos de los que se pueden preparar.
+ * - porFormula: Map formula_id -> gramos de esencia por frasco
+ * - porProducto: Map producto_id -> gramos disponibles de su esencia
+ *   (solo si todas sus presentaciones usan una misma esencia; si no, no se envía y
+ *   el límite lo pone el servidor al confirmar el pedido)
+ */
+async function getEsenciaCatalogo(productIds, sqlClient = sql) {
+  const ids = Array.from(new Set((productIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0)));
+  const porFormula = new Map(); const porProducto = new Map();
+  if (ids.length === 0) return { porFormula, porProducto };
+  const rows = await sqlClient`
+    WITH esencia_disponible AS (
+      SELECT i.producto_id, SUM(i.stock_fisico - i.stock_comprometido) AS disponible
+      FROM inventario i
+      JOIN almacenes a ON a.id = i.almacen_id
+      WHERE a.es_materia_prima IS TRUE
+      GROUP BY i.producto_id
+    )
+    SELECT f.id AS formula_id, f.producto_terminado_id AS producto_id, fc.materia_prima_id AS esencia_id,
+           fc.cantidad AS gramos, COALESCE(ed.disponible, 0) AS disponible
+    FROM formulas f
+    JOIN formula_componentes fc ON fc.formula_id = f.id
+    JOIN productos mp ON mp.id = fc.materia_prima_id
+    LEFT JOIN esencia_disponible ed ON ed.producto_id = mp.id
+    WHERE f.producto_terminado_id = ANY(${ids}) AND f.activo = TRUE
+      AND mp.nombre ILIKE 'ESC.%INSP%' AND fc.cantidad > 0
+  `;
+  const esenciasPorProducto = new Map();
+  (rows || []).forEach((r) => {
+    porFormula.set(Number(r.formula_id), Number(r.gramos));
+    const p = Number(r.producto_id);
+    if (!esenciasPorProducto.has(p)) esenciasPorProducto.set(p, new Map());
+    esenciasPorProducto.get(p).set(Number(r.esencia_id), Math.max(0, Number(r.disponible)));
+  });
+  esenciasPorProducto.forEach((esencias, p) => { if (esencias.size === 1) porProducto.set(p, [...esencias.values()][0]); });
+  return { porFormula, porProducto };
+}
+
+/**
+ * Revisa un pedido completo: suma la esencia que piden todas las líneas (cantidad x gramos
+ * por frasco) agrupada por esencia, y la compara con lo disponible. Así se detecta, por
+ * ejemplo, 2 frascos de 50 ml cuando solo alcanza para 1, o 50 ml + 30 ml del mismo perfume.
+ * lineas: [{ formula_id, cantidad }]. Devuelve [{ esencia_id, nombre, necesita, disponible, formulas: [ids] }]
+ * con las esencias que no alcanzan (vacío si todo alcanza).
+ */
+async function getEsenciasQueNoAlcanzan(lineas, sqlClient = sql) {
+  const cantPorFormula = new Map();
+  (lineas || []).forEach((l) => {
+    const fid = Number(l.formula_id); const c = Number(l.cantidad);
+    if (Number.isInteger(fid) && fid > 0 && c > 0) cantPorFormula.set(fid, (cantPorFormula.get(fid) || 0) + c);
+  });
+  if (cantPorFormula.size === 0) return [];
+  const rows = await sqlClient`
+    WITH esencia_disponible AS (
+      SELECT i.producto_id, SUM(i.stock_fisico - i.stock_comprometido) AS disponible
+      FROM inventario i
+      JOIN almacenes a ON a.id = i.almacen_id
+      WHERE a.es_materia_prima IS TRUE
+      GROUP BY i.producto_id
+    )
+    SELECT fc.formula_id, fc.materia_prima_id AS esencia_id, mp.nombre, fc.cantidad AS gramos, COALESCE(ed.disponible, 0) AS disponible
+    FROM formula_componentes fc
+    JOIN productos mp ON mp.id = fc.materia_prima_id
+    LEFT JOIN esencia_disponible ed ON ed.producto_id = mp.id
+    WHERE fc.formula_id = ANY(${Array.from(cantPorFormula.keys())})
+      AND mp.nombre ILIKE 'ESC.%INSP%' AND fc.cantidad > 0
+  `;
+  const porEsencia = new Map();
+  (rows || []).forEach((r) => {
+    const e = Number(r.esencia_id);
+    if (!porEsencia.has(e)) porEsencia.set(e, { esencia_id: e, nombre: r.nombre, necesita: 0, disponible: Number(r.disponible), formulas: [] });
+    const x = porEsencia.get(e);
+    x.necesita += Number(r.gramos) * cantPorFormula.get(Number(r.formula_id));
+    x.formulas.push(Number(r.formula_id));
+  });
+  return [...porEsencia.values()].filter((x) => x.necesita > x.disponible + 1e-9);
+}
+
+module.exports = { getAgotadoProductIds, getFormulaIdsSinEsencia, getQuedanPocosProductIds, getEsenciaCatalogo, getEsenciasQueNoAlcanzan };

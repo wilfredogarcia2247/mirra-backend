@@ -3,7 +3,7 @@ const { fichaPublica } = require('../services/fichaPerfume');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
-const { getAgotadoProductIds, getFormulaIdsSinEsencia, getQuedanPocosProductIds } = require('../services/productosAgotados');
+const { getAgotadoProductIds, getFormulaIdsSinEsencia, getQuedanPocosProductIds, getEsenciaCatalogo } = require('../services/productosAgotados');
 const { getCategoriasPorProducto } = require('../services/productoCategorias');
 const { getMasPedidosIds } = require('../services/productosMasPedidos');
 
@@ -106,6 +106,11 @@ router.get('/', async (req, res) => {
     }
     // Presentaciones sin esencia para una unidad: la tienda las muestra apagadas ("Agotado")
     const formulasSinEsencia = await getFormulaIdsSinEsencia(productIds);
+    // Gramos por frasco y gramos que quedan: el carrito no deja sumar más frascos de los que se pueden preparar
+    const esencia = await getEsenciaCatalogo(productIds).catch((err) => {
+      console.error('No se pudo calcular la esencia del catálogo:', err.message);
+      return { porFormula: new Map(), porProducto: new Map() };
+    });
     // Agrupar 'formulas' (presentaciones) por producto usando las filas de `formulas`
     const formulasPorProducto = {};
     (formulasRows || []).forEach((f) => {
@@ -120,6 +125,7 @@ router.get('/', async (req, res) => {
         precio_calculado: null,
         costo_pedido: f.costo != null ? Number(f.costo) : null,
         agotada: formulasSinEsencia.has(Number(f.id)),
+        esencia_g: esencia.porFormula.get(Number(f.id)) ?? null,
       };
       if (!formulasPorProducto[f.producto_id]) formulasPorProducto[f.producto_id] = [];
       formulasPorProducto[f.producto_id].push(entry);
@@ -179,6 +185,7 @@ router.get('/', async (req, res) => {
         destacado: Boolean(p.destacado),
         agotado: agotados.has(Number(p.id)),
         quedan_pocos: !agotados.has(Number(p.id)) && quedanPocos.has(Number(p.id)),
+        esencia_disponible_g: esencia.porProducto.get(Number(p.id)) ?? null,
         mas_pedido: masPedidos.has(Number(p.id)),
         formulas: formulasPorProducto[p.id] || [],
         image_url: p.image_url,
