@@ -11,6 +11,8 @@ const DURACION = ['baja', 'media', 'alta'];
 const ESTELA = ['suave', 'se_nota', 'fuerte'];
 const FAMILIAS = ['citrico', 'fresco', 'floral', 'frutal', 'dulce', 'oriental', 'amaderado', 'especiado', 'acuatico', 'gourmand'];
 const TEMPORADAS = ['primavera', 'verano', 'otono', 'invierno'];
+// Color del líquido: la tienda muestra el frasco Mirra de ese color (estilo nuevo, 2026-11)
+const COLORES_LIQUIDO = ['transparente', 'dorado-clarito', 'ambar-claro', 'ambar', 'marron-oscuro'];
 
 let columnaLista = null;
 function asegurarColumnaFicha() {
@@ -30,6 +32,12 @@ const varios = (v, lista) => Array.from(new Set((Array.isArray(v) ? v : []).filt
 function notas(v) {
   const lista = Array.isArray(v) ? v : String(v ?? '').split(',');
   return lista.map((n) => texto(n, 40)).filter(Boolean).slice(0, 12);
+}
+
+// Dirección de una foto subida (http/https, sin espacios ni comillas) o vacío
+function url(v) {
+  const t = String(v ?? '').trim();
+  return /^https?:\/\/[^\s"'<>]{3,500}$/i.test(t) ? t : null;
 }
 
 // Año de lanzamiento del perfume original (entero razonable o vacío)
@@ -53,6 +61,11 @@ function normalizarFicha(body) {
     duracion: uno(b.duracion, DURACION),
     estela: uno(b.estela, ESTELA),
     temporadas: varios(b.temporadas, TEMPORADAS),
+    // Estilo nuevo de la tienda: nombre propio de Mirra (se muestra con el número del perfume),
+    // color del líquido del frasco y fotos extra de la galería. Todo opcional.
+    nombre_mirra: texto(b.nombre_mirra, 60) || null,
+    color_liquido: uno(b.color_liquido, COLORES_LIQUIDO),
+    fotos: { huele: url(b.fotos && b.fotos.huele), inspirado: url(b.fotos && b.fotos.inspirado), estilo: url(b.fotos && b.fotos.estilo) },
     revisada: b.revisada === true,
   };
 }
@@ -73,4 +86,4 @@ function fichaPublica(ficha) {
   return ficha && ficha.revisada === true ? ficha : null;
 }
 
-module.exports = { guardarFicha, normalizarFicha, fichaPublica, asegurarColumnaFicha, PARA, MOMENTO, DURACION, ESTELA, FAMILIAS, TEMPORADAS };
+module.exports = { guardarFicha, normalizarFicha, fichaPublica, asegurarColumnaFicha, PARA, MOMENTO, DURACION, ESTELA, FAMILIAS, TEMPORADAS, COLORES_LIQUIDO };

@@ -14,3 +14,6 @@ coverage/
 # IDE
 .vscode/
 .idea/
+
+# Respaldos de fichas que crea scripts/importar_estilo_tienda.js
+scripts/respaldos/

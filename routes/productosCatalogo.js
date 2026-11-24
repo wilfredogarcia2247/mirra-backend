@@ -3,7 +3,7 @@ const { fichaPublica } = require('../services/fichaPerfume');
 const router = express.Router();
 const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
-const { getAgotadoProductIds } = require('../services/productosAgotados');
+const { getAgotadoProductIds, getFormulaIdsSinEsencia, getQuedanPocosProductIds, getEsenciaCatalogo } = require('../services/productosAgotados');
 const { getCategoriasPorProducto } = require('../services/productoCategorias');
 const { getMasPedidosIds } = require('../services/productosMasPedidos');
 
@@ -104,6 +104,13 @@ router.get('/', async (req, res) => {
         FROM formulas WHERE producto_terminado_id = ANY(${productIds}) AND activo = TRUE ORDER BY producto_terminado_id, nombre
       `;
     }
+    // Presentaciones sin esencia para una unidad: la tienda las muestra apagadas ("Agotado")
+    const formulasSinEsencia = await getFormulaIdsSinEsencia(productIds);
+    // Gramos por frasco y gramos que quedan: el carrito no deja sumar más frascos de los que se pueden preparar
+    const esencia = await getEsenciaCatalogo(productIds).catch((err) => {
+      console.error('No se pudo calcular la esencia del catálogo:', err.message);
+      return { porFormula: new Map(), porProducto: new Map() };
+    });
     // Agrupar 'formulas' (presentaciones) por producto usando las filas de `formulas`
     const formulasPorProducto = {};
     (formulasRows || []).forEach((f) => {
@@ -117,13 +124,20 @@ router.get('/', async (req, res) => {
         factor_multiplicador_venta: null,
         precio_calculado: null,
         costo_pedido: f.costo != null ? Number(f.costo) : null,
+        agotada: formulasSinEsencia.has(Number(f.id)),
+        esencia_g: esencia.porFormula.get(Number(f.id)) ?? null,
       };
       if (!formulasPorProducto[f.producto_id]) formulasPorProducto[f.producto_id] = [];
       formulasPorProducto[f.producto_id].push(entry);
     });
 
-    // Productos sin esencia suficiente: se muestran con el cartel AGOTADO (no se ocultan)
+    // Productos sin esencia para ninguna presentación: se muestran con el cartel AGOTADO (no se ocultan)
     const agotados = await getAgotadoProductIds(productIds);
+    // "Quedan pocos": esencia para 3 o menos frascos de 100 ml. Si falla, el catálogo sale igual sin etiqueta.
+    const quedanPocos = await getQuedanPocosProductIds(productIds).catch((err) => {
+      console.error('No se pudo calcular "Quedan pocos":', err.message);
+      return new Set();
+    });
     // Un perfume puede estar en varias categorías (Hombre y Mujer = unisex)
     const categoriasPorProducto = await getCategoriasPorProducto(productIds);
     // Etiqueta "🔥 Más pedido": solo entre los que se ven en la tienda y no están agotados.
@@ -170,6 +184,8 @@ router.get('/', async (req, res) => {
         precio_venta: p.precio_venta,
         destacado: Boolean(p.destacado),
         agotado: agotados.has(Number(p.id)),
+        quedan_pocos: !agotados.has(Number(p.id)) && quedanPocos.has(Number(p.id)),
+        esencia_disponible_g: esencia.porProducto.get(Number(p.id)) ?? null,
         mas_pedido: masPedidos.has(Number(p.id)),
         formulas: formulasPorProducto[p.id] || [],
         image_url: p.image_url,

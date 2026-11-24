@@ -4,7 +4,7 @@ const { neon } = require('@neondatabase/serverless');
 const sql = neon(process.env.DATABASE_URL);
 const { sendTextMessage, formatOrderNotificationMessage } = require('../services/waha');
 const { resolveClienteFromBody } = require('./clientes');
-const { getAgotadoProductIds } = require('../services/productosAgotados');
+const { getAgotadoProductIds, getFormulaIdsSinEsencia, getEsenciasQueNoAlcanzan } = require('../services/productosAgotados');
 const { faltanSieteMl, avisoSieteMl } = require('../services/minimoSieteMl');
 const {
   normalizeCodigo,
@@ -190,13 +190,42 @@ router.post('/', async (req, res) => {
       cuponAplicado = resultadoCupon.cupon;
     }
 
-    // No se aceptan productos agotados (sin esencia suficiente), aunque estén en el carrito
-    const agotados = await getAgotadoProductIds(productos.map((p) => p.producto_id));
-    if (agotados.size > 0) {
-      const nombres = await sql`SELECT nombre FROM productos WHERE id = ANY(${Array.from(agotados)})`;
+    // No se aceptan tamaños sin esencia suficiente, aunque estén en el carrito.
+    // Cada línea se revisa por su presentación (formula_id); si no trae, por el perfume completo.
+    const idsProducto = productos.map((p) => p.producto_id);
+    const formulasSinEsencia = await getFormulaIdsSinEsencia(idsProducto);
+    const agotados = await getAgotadoProductIds(idsProducto);
+    const lineasSinEsencia = productos.filter((p) => {
+      const fid = Number(p.formula_id);
+      return Number.isInteger(fid) && fid > 0 ? formulasSinEsencia.has(fid) : agotados.has(Number(p.producto_id));
+    });
+    if (lineasSinEsencia.length > 0) {
+      const idsF = [...new Set(lineasSinEsencia.map((p) => Number(p.formula_id)).filter((n) => Number.isInteger(n) && n > 0))];
+      const idsP = [...new Set(lineasSinEsencia.map((p) => Number(p.producto_id)))];
+      const nombresF = idsF.length ? await sql`SELECT nombre FROM formulas WHERE id = ANY(${idsF})` : [];
+      const nombresP = await sql`SELECT id, nombre FROM productos WHERE id = ANY(${idsP})`;
+      const sinTamano = lineasSinEsencia.filter((p) => !(Number(p.formula_id) > 0)).map((p) => (nombresP || []).find((n) => Number(n.id) === Number(p.producto_id))?.nombre).filter(Boolean);
+      const lista = [...(nombresF || []).map((n) => n.nombre), ...sinTamano];
       return res.status(400).json({
-        error: `Producto agotado por el momento: ${(nombres || []).map((n) => n.nombre).join(', ')}. Quítalo del carrito para continuar.`,
-        productos_agotados: Array.from(agotados),
+        error: `Ya no queda esencia para: ${lista.join(', ')}. Quítalo del carrito o elige otro tamaño para continuar.`,
+        productos_agotados: idsP,
+        formulas_agotadas: idsF,
+      });
+    }
+
+    // Todo el pedido junto: la esencia que piden todas las líneas (p. ej. 2 de 50 ml, o 50 ml + 30 ml
+    // del mismo perfume) no puede pasar de lo que queda
+    const noAlcanzan = await getEsenciasQueNoAlcanzan(productos);
+    if (noAlcanzan.length > 0) {
+      const idsF = [...new Set(noAlcanzan.flatMap((x) => x.formulas))];
+      const filas = await sql`
+        SELECT f.id, p.nombre AS producto
+        FROM formulas f JOIN productos p ON p.id = f.producto_terminado_id WHERE f.id = ANY(${idsF})`;
+      // Nombre del perfume de cada esencia que no alcanza
+      const nombres = noAlcanzan.map((x) => (filas || []).find((f) => x.formulas.includes(Number(f.id)))?.producto || x.nombre);
+      return res.status(400).json({
+        error: `No queda esencia suficiente para la cantidad pedida de: ${[...new Set(nombres)].join(', ')}. Baja la cantidad o elige otro tamaño para continuar.`,
+        formulas_sin_esencia_suficiente: idsF,
       });
     }
 
