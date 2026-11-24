@@ -44,17 +44,27 @@ async function paginaCompartir(req, res) {
     const precios = pres.map((x) => Number(x.precio)).filter((n) => Number.isFinite(n) && n > 0);
     const tamanos = Array.from(new Set(pres.map((x) => tamanoDe(x.nombre)).filter(Boolean))).sort((a, b) => a - b);
 
-    const nombre = nombreBonito(p.nombre);
-    const titulo = `${nombre} · Mirra Perfumería`;
+    // Con nombre Mirra (estilo nuevo): "Café de Medianoche · inspirado en Black Opium".
+    // Sin nombre Mirra: como siempre, "Black Opium · Mirra Perfumería".
+    const nombreMirra = String(ficha?.nombre_mirra || '').trim();
+    const inspirado = String(ficha?.inspirado_en || '').trim();
+    const nombre = nombreMirra || nombreBonito(p.nombre);
+    const titulo = nombreMirra
+      ? `${nombreMirra} · inspirado en ${inspirado || nombreBonito(p.nombre)}`
+      : `${nombre} · Mirra Perfumería`;
     const partes = [];
-    if (ficha?.inspirado_en) partes.push(`Inspirado en ${ficha.inspirado_en}.`);
+    if (!nombreMirra && inspirado) partes.push(`Inspirado en ${inspirado}.`);
     if (agotado) partes.push('Agotado por el momento: déjanos tu WhatsApp y te avisamos cuando llegue.');
     else {
       if (precios.length) partes.push(`Desde $${Math.min(...precios).toFixed(2).replace(/\.00$/, '')}`);
-      if (tamanos.length) partes.push(`${tamanos.join(', ').replace(/, (\d+)$/, ' y $1')} ml.`);
+      if (tamanos.length) partes.push(`${tamanos.join(', ').replace(/, (\d+)$/, ' y $1')} ml`);
     }
+    if (nombreMirra) partes.push('Mirra Perfumería');
     const descripcion = partes.join(' · ').replace(' · Agotado', ' Agotado') || 'Perfumes inspirados en las grandes fragancias.';
-    const imagen = /^https?:\/\//i.test(p.image_url || '') ? p.image_url : `${TIENDA_URL}/logo.png`;
+    // WhatsApp a veces no muestra fotos con http: se pide siempre por https (la foto guardada no cambia)
+    const imagen = /^https?:\/\//i.test(p.image_url || '')
+      ? p.image_url.replace(/^http:\/\//i, 'https://')
+      : `${TIENDA_URL}/logo.png`;
     const enlace = `${TIENDA_URL}/p/${escapar(req.params.slug)}`;
 
     res.set('Cache-Control', 'public, max-age=600');
