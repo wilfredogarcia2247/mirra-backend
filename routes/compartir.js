@@ -41,7 +41,6 @@ async function paginaCompartir(req, res) {
     const agotado = (await getAgotadoProductIds([id], sql)).has(id);
     const ficha = fichaPublica(p.ficha);
     const pres = (p.presentaciones || []).filter((x) => x && x.precio != null);
-    const precios = pres.map((x) => Number(x.precio)).filter((n) => Number.isFinite(n) && n > 0);
     const tamanos = Array.from(new Set(pres.map((x) => tamanoDe(x.nombre)).filter(Boolean))).sort((a, b) => a - b);
 
     // Con nombre Mirra (estilo nuevo): "Café de Medianoche · inspirado en Black Opium".
@@ -55,10 +54,9 @@ async function paginaCompartir(req, res) {
     const partes = [];
     if (!nombreMirra && inspirado) partes.push(`Inspirado en ${inspirado}.`);
     if (agotado) partes.push('Agotado por el momento: déjanos tu WhatsApp y te avisamos cuando llegue.');
-    else {
-      if (precios.length) partes.push(`Desde $${Math.min(...precios).toFixed(2).replace(/\.00$/, '')}`);
-      if (tamanos.length) partes.push(`${tamanos.join(', ').replace(/, (\d+)$/, ' y $1')} ml`);
-    }
+    // Sin precio: WhatsApp guarda la vista previa en el mensaje y un precio (en $ o Bs) quedaría viejo.
+    // El cliente ve el precio al día en la tienda.
+    else if (tamanos.length) partes.push(`${tamanos.join(', ').replace(/, (\d+)$/, ' y $1')} ml`);
     if (nombreMirra) partes.push('Mirra Perfumería');
     const descripcion = partes.join(' · ').replace(' · Agotado', ' Agotado') || 'Perfumes inspirados en las grandes fragancias.';
     // WhatsApp a veces no muestra fotos con http: se pide siempre por https (la foto guardada no cambia)
